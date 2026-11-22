@@ -1,0 +1,20 @@
+Handoff Vibe 0.1.0, package handoff-vibe
+
+28 Python checks and 10 GNOME indicator state checks passed. Native GUI smoke
+tests passed with the updated About license description and 0.1.0 version.
+
+Verified that the upstream engine files exactly match original commit
+4568bde6f19efe480bdc0e26058f49998bb58912. Project integration changes are
+separated into patches/0001-gui-integration.patch and applied during build.
+The patched engine builds successfully. The official unmodified PolyForm
+Noncommercial 1.0.0 text is included alongside MIT upstream notices.
+
+Built and inspected handoff-vibe_0.1.0_amd64.deb on Debian 13. Verified Package,
+Version, Conflicts and Replaces metadata, the handoff-vibe launcher, and the
+legacy handoff command alias. Old/new payload-overlay transition layout checks
+passed from package handoff 0.2.0 to handoff-vibe 0.1.0 with config bytes and
+desktop identity preserved. This is not a privileged installation/dependency
+resolution test. Desktop launcher validation passed.
+
+Live headset switching, user-service changes, and GNOME Shell indicator loading
+remain untested. No existing user installation or service was changed.

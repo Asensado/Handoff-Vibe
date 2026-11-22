@@ -1,0 +1,8 @@
+{
+  "uuid": "handoff-vibe@asensado.github.io",
+  "name": "Handoff Vibe Status",
+  "description": "Headset audio-switching status in the top bar, with a shortcut to Handoff Vibe.",
+  "shell-version": ["48"],
+  "url": "https://github.com/Asensado/",
+  "version": 1
+}

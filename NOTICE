@@ -1,0 +1,14 @@
+Required Notice: Copyright (c) 2026 Asensado (https://github.com/Asensado/)
+
+Handoff Vibe's original GUI, service integration, packaging, tests, Shell
+extension, and engine integration patch are offered under the PolyForm
+Noncommercial License 1.0.0 in LICENSE, to the extent Asensado can license them.
+For separate commercial permission, contact Asensado through the GitHub profile.
+No contact alone grants permission; obtain a separate written license.
+
+Original Handoff engine: Copyright (c) Aayushman Choudhary (xatuke) and
+contributors, https://github.com/xatuke/handoff. Its original code remains
+under MIT; see upstream/LICENSE and LICENSES/MIT-upstream.txt.
+
+Apple and Beats photos and trademarks are not licensed by this project.
+World English Bible text is public domain. See THIRD_PARTY.md and LICENSING.md.

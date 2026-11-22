@@ -1,0 +1,7 @@
+#!/usr/bin/python3
+import sys
+from pathlib import Path
+root = Path(__file__).resolve().parent
+sys.path.insert(0, str(root if (root / 'handoff_ui').exists() else Path('/usr/share/handoff')))
+from handoff_ui.app import main
+raise SystemExit(main())
