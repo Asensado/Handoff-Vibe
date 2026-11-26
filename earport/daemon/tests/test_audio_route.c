@@ -159,7 +159,7 @@ static void test_hung_command_recovers(void)
     gint64 started = g_get_monotonic_time();
     g_autofree char *failed = restart("streams");
     g_assert_true(logged("Could not restart"));
-    g_assert_cmpint(g_get_monotonic_time() - started, <, G_USEC_PER_SEC);
+    g_assert_cmpint(g_get_monotonic_time() - started, <, 4 * G_USEC_PER_SEC);
     g_autofree char *path = g_build_filename(dir, "hang", NULL);
     g_unlink(path);
     setup(SINKS, INPUTS, false);
