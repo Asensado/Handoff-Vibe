@@ -8,8 +8,13 @@
  */
 
 #include <glib.h>
+#include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "audio_route.h"
 
@@ -20,6 +25,7 @@ static GPtrArray *messages;
 
 static const char FAKE_PACTL[] =
     "#!/bin/sh\n"
+    "echo $$ > \"$FAKE_PACTL_DIR/child-pid\"\n"
     "[ -e \"$FAKE_PACTL_DIR/hang\" ] && exec /bin/sleep 60\n"
     "case \"$1\" in\n"
     "list) [ \"$2\" = sinks ] && cat \"$FAKE_PACTL_DIR/sinks\" || cat \"$FAKE_PACTL_DIR/inputs\";;\n"
@@ -202,8 +208,55 @@ static void test_one_at_a_time(void)
     g_assert_cmpuint(starts, ==, 1);
 }
 
+/* Killing the backend must kill its direct pactl leaf even without cleanup. */
+static void test_backend_death_kills_command(void)
+{
+    setup(SINKS, INPUTS, false);
+    write_file("hang", "");
+    g_autofree char *pid_file = g_build_filename(dir, "child-pid", NULL);
+    g_unlink(pid_file);
+    g_assert_cmpint(prctl(PR_SET_CHILD_SUBREAPER, 1), ==, 0);
+    g_autofree char *self = g_file_read_link("/proc/self/exe", NULL);
+    GSubprocessLauncher *launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+        G_SUBPROCESS_FLAGS_STDERR_SILENCE);
+    g_subprocess_launcher_setenv(launcher, "FAKE_REPAIR_LONG_TIMEOUT", "1", TRUE);
+    GSubprocess *backend = g_subprocess_launcher_spawn(launcher, NULL, self, "--parent-death-fixture", NULL);
+    g_object_unref(launcher);
+    g_assert_nonnull(backend);
+    char *text = NULL;
+    gint64 end = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+    while (!g_file_get_contents(pid_file, &text, NULL, NULL) && g_get_monotonic_time() < end)
+        g_usleep(1000);
+    pid_t command = text ? (pid_t)g_ascii_strtoll(text, NULL, 10) : 0;
+    g_free(text);
+    g_subprocess_force_exit(backend);
+    g_assert_true(g_subprocess_wait(backend, NULL, NULL));
+    g_object_unref(backend);
+    g_assert_cmpint(command, >, 1);
+    int status = 0;
+    pid_t reaped = 0;
+    end = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while ((reaped = waitpid(command, &status, WNOHANG)) == 0 && g_get_monotonic_time() < end)
+        g_usleep(1000);
+    if (reaped == 0) {  /* Reap on failure too, rather than strand a fixture. */
+        kill(command, SIGKILL);
+        waitpid(command, NULL, 0);
+    }
+    g_assert_cmpint(prctl(PR_SET_CHILD_SUBREAPER, 0), ==, 0);
+    g_autofree char *hang = g_build_filename(dir, "hang", NULL);
+    g_unlink(hang);
+    g_assert_cmpint(reaped, ==, command);
+    g_assert_true(WIFSIGNALED(status));
+    g_assert_cmpint(WTERMSIG(status), ==, SIGKILL);
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && g_strcmp0(argv[1], "--parent-death-fixture") == 0) {
+        audio_route_restart(AIRPODS, "streams");
+        g_main_loop_run(g_main_loop_new(NULL, FALSE));
+        return 1;
+    }
     g_test_init(&argc, &argv, NULL);
     messages = g_ptr_array_new_with_free_func(g_free);
     g_log_set_handler(NULL, G_LOG_LEVEL_MESSAGE | G_LOG_LEVEL_WARNING, log_handler, NULL);
@@ -228,9 +281,10 @@ int main(int argc, char **argv)
     g_test_add_func("/audio-route/hung-command-recovers", test_hung_command_recovers);
     g_test_add_func("/audio-route/cancel-cleans-output", test_cancel_cleans_suspended_output);
     g_test_add_func("/audio-route/one-at-a-time", test_one_at_a_time);
+    g_test_add_func("/audio-route/backend-death-kills-command", test_backend_death_kills_command);
     int ret = g_test_run();
 
-    const char *files[] = { "pactl", "sleep", "sinks", "inputs", "log", "fail-load" };
+    const char *files[] = { "pactl", "sleep", "sinks", "inputs", "log", "fail-load", "child-pid" };
     for (gsize i = 0; i < G_N_ELEMENTS(files); i++) {
         g_autofree char *file = g_build_filename(dir, files[i], NULL);
         g_unlink(file);

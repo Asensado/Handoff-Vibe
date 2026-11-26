@@ -171,7 +171,12 @@ static void run_step(Repair *r, Step step)
         fail_or_cancel(r);
         return;
     }
-    r->timer = g_timeout_add(AUDIO_REPAIR_STEP_MS, deadline, r);
+    guint step_ms = AUDIO_REPAIR_STEP_MS;
+#ifdef AUDIO_REPAIR_TESTING
+    if (g_getenv("FAKE_REPAIR_LONG_TIMEOUT"))
+        step_ms = 10000;  /* Parent-death regression must precede the timeout. */
+#endif
+    r->timer = g_timeout_add(step_ms, deadline, r);
     g_subprocess_communicate_utf8_async(r->child, NULL, NULL, completed, r);
 }
 
