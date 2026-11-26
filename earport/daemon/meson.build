@@ -54,6 +54,7 @@ battery_provider_gen = gnome.gdbus_codegen('bluez-battery-provider',
 # Source files
 sources = files(
     'src/main.c',
+    '../../native/process_guard.c',
     'src/airpods_state.c',
     'src/airpods_settings.c',
     'src/aap_link.c',

@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ * SPDX-FileCopyrightText: 2026 Asensado
  *
  * The AAP link to the AirPods connected through BlueZ: L2CAP connection,
  * handshake, and keeping the link useful. The AirPods often refuse the
@@ -25,6 +26,8 @@ typedef struct {
     void (*disconnected)(void *user_data);
     /* A packet the parser understood */
     void (*packet)(const AapParsedPacket *packet, void *user_data);
+    /* A repaired channel needs fresh ownership telemetry; optional. */
+    void (*resynchronized)(void *user_data);
 } AapLinkCallbacks;
 
 typedef struct AapLink AapLink;

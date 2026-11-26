@@ -11,7 +11,7 @@
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QRegularExpression>
-#include <QLockFile>
+#include "../native/process_guard.h"
 #include <iostream>
 #include "packets.h"
 #include "headsetcontrols.h"
@@ -438,9 +438,9 @@ int main(int argc, char *argv[]) {
     QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     if (runtime.isEmpty()) return 3;
     QDir().mkpath(runtime + "/handoff");
-    QLockFile lock(runtime + "/handoff/" + compact + ".lock");
-    if (!lock.tryLock(0)) {
-        std::cerr << "A Handoff engine already manages this headset" << std::endl;
+    const int processGuard = handoff_process_guard();
+    if (processGuard < 0) {
+        std::cerr << "A Handoff backend already owns the control transport" << std::endl;
         return 4;
     }
 

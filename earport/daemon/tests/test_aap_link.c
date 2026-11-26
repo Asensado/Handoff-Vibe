@@ -27,6 +27,7 @@ typedef struct {
     int connected;
     int disconnected;
     int batteries;
+    int resynchronized;
     AapLink *link;
 } Fixture;
 
@@ -61,6 +62,11 @@ static void on_packet(const AapParsedPacket *packet, void *user_data)
         f->batteries++;
 }
 
+static void on_resynchronized(void *data)
+{
+    ((Fixture *)data)->resynchronized++;
+}
+
 static void fixture_setup(Fixture *f, gconstpointer data)
 {
     (void)data;
@@ -68,6 +74,7 @@ static void fixture_setup(Fixture *f, gconstpointer data)
         .connected = on_connected,
         .disconnected = on_disconnected,
         .packet = on_packet,
+        .resynchronized = on_resynchronized,
     };
 
     fake_bt_reset();
@@ -222,6 +229,7 @@ static void test_silent_reopen(Fixture *f, gconstpointer data)
     g_assert_cmpint(f->connected, ==, 1);
     g_assert_cmpint(f->disconnected, ==, 0);
     g_assert_cmpuint(HANDSHAKES(), ==, 2);
+    g_assert_cmpint(f->resynchronized, ==, 1);
     /* Handshake, 5 retries, handshake of the new link */
     g_assert_cmpuint(SET_FEATURES(), >=, 7);
 
@@ -270,6 +278,21 @@ static void test_refused_then_backoff(Fixture *f, gconstpointer data)
 
     g_assert_true(aap_link_is_connected(f->link));
     g_assert_cmpint(f->connected, ==, 1);
+}
+
+static void test_duplicate_connected_does_not_bypass_backoff(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    fake_bt.refuse_connects = 100;
+    aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+    for (int i = 0; i < 10; i++)
+        aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+    g_assert_cmpint(fake_bt.connect_count, ==, 1);
+    run_for(31 * RECONNECT_MS + 50);
+    g_assert_cmpint(fake_bt.connect_count, ==, 6);
+    aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+    run_for(50);
+    g_assert_cmpint(fake_bt.connect_count, ==, 6);
 }
 
 static void test_gives_up(Fixture *f, gconstpointer data)
@@ -431,6 +454,7 @@ static void test_watchdog_reopens_deaf_link(Fixture *f, gconstpointer data)
     g_assert_cmpint(f->connected, ==, 1);
     g_assert_cmpint(f->disconnected, ==, 0);
     g_assert_cmpuint(HANDSHAKES(), ==, 2);
+    g_assert_cmpint(f->resynchronized, ==, 1);
 }
 
 static void test_watchdog_quiet_while_packets(Fixture *f, gconstpointer data)
@@ -478,6 +502,7 @@ int main(int argc, char *argv[])
     ADD("/link/silent-reopen", test_silent_reopen);
     ADD("/link/silent-reopen-restores-battery", test_silent_reopen_restores_battery);
     ADD("/link/refused-then-backoff", test_refused_then_backoff);
+    ADD("/link/duplicate-connected-backoff", test_duplicate_connected_does_not_bypass_backoff);
     ADD("/link/gives-up", test_gives_up);
     ADD("/link/peer-closes", test_peer_closes);
     ADD("/link/bluez-disconnect", test_bluez_disconnect);

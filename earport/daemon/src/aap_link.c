@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ * SPDX-FileCopyrightText: 2026 Asensado
  */
 
 #include "aap_link.h"
@@ -201,7 +202,6 @@ static void cancel_reconnect(AapLink *link)
         g_source_remove(link->reconnect_timeout_id);
         link->reconnect_timeout_id = 0;
     }
-    link->reconnect_attempts = 0;
 }
 
 /* ============================================================================
@@ -376,6 +376,7 @@ static void on_bt_data_received(const uint8_t *data, size_t len, void *user_data
     }
 
     if (packet.type == AAP_PKT_TYPE_BATTERY) {
+        link->reconnect_attempts = 0;
         link->battery_received = true;
         cancel_notif_retry(link);
     }
@@ -414,6 +415,8 @@ static void on_bt_state_changed(BluetoothState state, const char *error, void *u
             /* Clients never saw the link go down: keep the current state
              * and don't announce a new connection. */
             link->silent_reconnect = false;
+            if (link->callbacks.resynchronized)
+                link->callbacks.resynchronized(link->user_data);
             g_message("AirPods link re-opened");
             break;
         }
@@ -518,8 +521,12 @@ void aap_link_free(AapLink *link)
 
 void aap_link_device_connected(AapLink *link, const char *address, const char *name)
 {
+    /* Repeated BlueZ signals are not new sessions or retry budgets. */
+    if (link->bluez_connected && g_strcmp0(address, link->address) == 0)
+        return;
+    if (!link->bluez_connected)
+        link->reconnect_attempts = 0;
     link->bluez_connected = true;
-    link->reconnect_attempts = 0;
     link->silent_reconnect_done = false;
 
     if (aap_link_is_connected(link)) {
@@ -542,6 +549,14 @@ void aap_link_device_disconnected(AapLink *link)
 {
     link->bluez_connected = false;
     cancel_reconnect(link);
+    if (link->silent_reconnect_id) {
+        g_source_remove(link->silent_reconnect_id);
+        link->silent_reconnect_id = 0;
+    }
+    if (link->keys_request_id) {
+        g_source_remove(link->keys_request_id);
+        link->keys_request_id = 0;
+    }
 
     /* The AirPods left during a silent reconnect: clients still think
      * they are connected, so report it now. */

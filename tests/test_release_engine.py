@@ -5,11 +5,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from handoff_ui import releases as R
 from handoff_ui.engine import snapshot, unpack
+from handoff_ui import engine as E
 from handoff_ui.models import identify
 
 
@@ -72,6 +73,45 @@ class Releases(unittest.TestCase):
 
 
 class Engine(unittest.TestCase):
+    def run_failed_supervisor(self, foreign_owner=False):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            bus = Mock()
+            child = Mock(pid=12345)
+            child.poll.return_value = None
+            def call(*args):
+                method = args[3]
+                if method == 'NameHasOwner':
+                    return Mock(unpack=lambda: (False,))
+                if method == 'GetNameOwner' and foreign_owner:
+                    return Mock(unpack=lambda: (':1.99',))
+                if method == 'GetConnectionUnixProcessID':
+                    return Mock(unpack=lambda: (99999,))
+                raise E.GLib.Error('backend unavailable')
+            bus.call_sync.side_effect = call
+            with patch.dict(E.os.environ, XDG_RUNTIME_DIR=directory), \
+                 patch.object(E.sys, 'argv', ['engine', 'AABBCCDDEEFF']), \
+                 patch.object(E.Gio, 'bus_get_sync', return_value=bus), \
+                 patch.object(E.subprocess, 'Popen', return_value=child) as spawn, \
+                 patch.object(E, 'stop_backend') as stop, \
+                 patch.object(E.signal, 'signal'), \
+                 patch.object(E.GLib, 'timeout_add_seconds'), \
+                 patch.object(E.time, 'monotonic', side_effect=[0, 21]):
+                result = E.main()
+                stop.assert_called_once_with(child)
+                self.assertTrue(spawn.call_args.kwargs['start_new_session'])
+                self.assertEqual(len(spawn.call_args.kwargs['pass_fds']), 2)
+            state = json.loads((folder / 'handoff/AABBCCDDEEFF.json').read_text())
+            self.assertFalse(state['ready'])
+            self.assertTrue(state['error'])
+            return result
+
+    def test_backend_timeout_exits_for_service_recovery(self):
+        self.assertEqual(self.run_failed_supervisor(), 1)
+
+    def test_foreign_bus_owner_is_not_used_as_our_device(self):
+        self.assertEqual(self.run_failed_supervisor(foreign_owner=True), 5)
+
     def test_powerbeats_identifier(self):
         model, status = identify({'Modalias': 'bluetooth:v004Cp202FdD41F'})
         self.assertEqual((model.key, status), ('powerbeatsfit', 'detected'))

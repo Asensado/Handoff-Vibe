@@ -35,7 +35,7 @@ shutil.copy2(ROOT / 'packaging/update-handoff', STAGE / 'usr/libexec/handoff/upd
 service_dir = STAGE / 'usr/lib/systemd/system'
 service_dir.mkdir(parents=True, exist_ok=True)
 shutil.copy2(ROOT / 'packaging/handoff-vibe-update.service', service_dir)
-for folder in ['earport', 'LICENSES']:
+for folder in ['earport', 'native', 'LICENSES']:
     shutil.copytree(ROOT / folder, STAGE / 'usr/share/doc/handoff-vibe' / folder,
                     ignore=shutil.ignore_patterns('build', 'build-*', '__pycache__'))
 shutil.copy2(ROOT / 'packaging/prepare-bluetooth', STAGE / 'usr/libexec/handoff/prepare-bluetooth')

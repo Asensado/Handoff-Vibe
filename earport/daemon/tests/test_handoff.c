@@ -17,6 +17,7 @@ typedef struct {
     int resumed;
     int restarted;
     int tried_again;
+    HandoffRestart last_how;
 } Calls;
 
 static void pause_players(void *user_data)
@@ -32,7 +33,8 @@ static void resume_players(void *user_data)
 static void restart_audio(HandoffRestart how, void *user_data)
 {
     Calls *calls = user_data;
-    if (how == HANDOFF_RESTART_OUTPUT)
+    calls->last_how = how;
+    if (calls->restarted > 0)
         calls->tried_again++;
     else
         calls->restarted++;
@@ -169,6 +171,7 @@ static void test_moment(void)
     run_for(300);
     WAIT_FOR(calls.tried_again >= 1);
     g_assert_cmpint(calls.tried_again, ==, 1);
+    g_assert_cmpint(calls.last_how, ==, HANDOFF_RESTART_STREAMS);
     g_assert_cmpint(calls.restarted, ==, 1);
     handoff_free(handoff);
 }
@@ -243,10 +246,58 @@ static void test_back_and_disabled(void)
     handoff_free(handoff);
 }
 
+/* Remote ownership seen at startup is not a request to play locally. */
+static void test_idle_remote_release(void)
+{
+    Calls calls = { 0 };
+    Handoff *h = handoff_new(&callbacks, &calls);
+    handoff_set_enabled(h, true);
+    handoff_source_changed(h, "other", false);
+    handoff_source_changed(h, "none", false);
+    run_for(300);
+    g_assert_cmpint(calls.restarted, ==, 0);
+    g_assert_cmpint(calls.tried_again, ==, 0);
+    handoff_free(h);
+}
+
+/* A pending pause from an older remote intent cannot pause a manual takeover. */
+static void test_manual_supersedes_pause(void)
+{
+    Calls calls = { 0 };
+    Handoff *h = handoff_new(&callbacks, &calls);
+    handoff_set_enabled(h, true);
+    handoff_source_changed(h, "other", false);
+    handoff_use_here(h);
+    run_for(200);
+    g_assert_cmpint(calls.paused, ==, 0);
+    g_assert_cmpint(calls.restarted, ==, 1);
+    g_assert_cmpint(calls.last_how, ==, HANDOFF_RESTART_ANY);
+    handoff_free(h);
+}
+
+/* A call escalation cancels an earlier playback claim, even with the same owner. */
+static void test_call_supersedes_playback(void)
+{
+    Calls calls = { 0 };
+    Handoff *h = handoff_new(&callbacks, &calls);
+    handoff_set_enabled(h, true);
+    handoff_source_changed(h, "other", false);
+    handoff_playback_started(h);
+    handoff_source_changed(h, "other", true);
+    handoff_playback_started(h);
+    run_for(300);
+    g_assert_cmpint(calls.restarted, ==, 0);
+    g_assert_cmpint(calls.tried_again, ==, 0);
+    handoff_free(h);
+}
+
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
 
+    g_test_add_func("/handoff/idle-remote-release", test_idle_remote_release);
+    g_test_add_func("/handoff/manual-supersedes-pause", test_manual_supersedes_pause);
+    g_test_add_func("/handoff/call-supersedes-playback", test_call_supersedes_playback);
     g_test_add_func("/handoff/kept", test_kept);
     g_test_add_func("/handoff/borrowed", test_borrowed);
     g_test_add_func("/handoff/borrowed-flap", test_borrowed_flap);

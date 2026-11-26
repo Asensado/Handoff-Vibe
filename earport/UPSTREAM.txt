@@ -1,3 +1,7 @@
 Source: https://github.com/Anoryth/earport
 Commit: aecd3bc056a8d5609e28ee6acfdbd2f1563b6162
 Local changes: Powerbeats Fit recognition and selected-device filtering.
+Reliability changes: Handoff process guard; bounded reconnect budget and duplicate
+BlueZ-event suppression; ownership invalidation after control-channel repair;
+safer handoff retries and cancellation of superseded ownership timers.
+The build also uses ../../native/process_guard.c (included in Handoff source).

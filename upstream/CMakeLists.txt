@@ -9,6 +9,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Bluetooth DBus Network)
 
 add_executable(airpods-handoff
     main.cpp
+    ../native/process_guard.c
     headsetcontrols.cpp
     media/mediacontroller.cpp
 )
