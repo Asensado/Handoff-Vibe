@@ -73,8 +73,8 @@ First-generation AirPods, Studio Buds/Studio Buds +, Studio Pro/Studio3, Solo Bu
 - Ear-detection pause/resume, with Never / Either earbud / Both earbuds settings.
 - Optional **Automatic connection**, which checks nearby activity before connecting and avoids taking a headset from another device playing audio or in a call.
 - Optional **proximity card** with batteries and a Connect button. This needs a previous connection, usable Bluetooth LE broadcasts and the GNOME companion.
-- Guided pairing, existing CLI migration, profile management and a way back to CLI management.
-- **What's new?** in the dotted menu, with Stable, Beta and Experimental release badges. Optional automatic updates install stable releases only.
+- Guided pairing, safe import of an existing installation and profile management. CLI export/restore is retired; migration backups remain available.
+- **What's new?** in the dotted menu, with Stable, Beta and Experimental release badges and read-only update notifications.
 - Advanced logs and an offline daily Bible verse.
 
 ## Everyday use
@@ -99,7 +99,16 @@ Open **Menu → Advanced logs** first if something does not work. Handoff keeps 
 
 Close the old GUI before upgrading. Install the new `.deb` with APT; your profiles remain in place. The optional `INSTALL-UPDATE.sh` release asset also stops/restarts the managed engine for an upgrade.
 
-**Preferences → Updates** controls launch-time checks and optional updates after `sudo apt update`. The latter schedules a separate installer after APT refreshes its lists; it does not replace your package sources. Only stable releases with the expected package metadata and GitHub SHA-256 digest are installed automatically. Beta/prerelease builds are downloaded manually from Releases.
+**Preferences → Updates** controls read-only release checks. **Automatic and in-app privileged installation are disabled** until an independently authenticated release-signing channel is available. A checksum obtained from the same GitHub API as a download is an integrity check, not an independent publisher signature. Download and deliberately install packages yourself after reviewing their release/source.
+
+If you still run the published 0.2.0 build, turn off **Update after APT refresh**. You can also disable its old hook with:
+
+```sh
+sudo /usr/bin/python3 -I /usr/libexec/handoff/update-handoff disable
+```
+
+Upgrading to the reviewed code removes the old APT update hook and opt-in marker. This source change does not retrofit already-installed older builds. The security review and fixes are recorded in [docs/SECURITY-REVIEW-2026-11-26.md](docs/SECURITY-REVIEW-2026-11-26.md).
+
 
 To uninstall, remove the headset profile or stop its background service first, then:
 
@@ -108,7 +117,7 @@ gnome-extensions disable handoff-vibe@asensado.github.io
 sudo apt remove handoff-vibe
 ```
 
-Profiles and pairing are retained. Removing the package does not undo the one-time Bluetooth Device ID preparation. Restore an independent CLI installation first if you want it to continue after removing the packaged engine.
+Profiles and pairing are retained. Removing the package does not undo the one-time Bluetooth Device ID preparation. CLI transfer is retired. Original migration backups are kept for reference; Handoff Vibe does not create an independent CLI installation.
 
 ## Development
 

@@ -699,6 +699,12 @@ static void handoff_resume_players(void *user_data)
     media_control_resume_handoff(app.media_control);
 }
 
+static void handoff_cancel_audio(void *user_data)
+{
+    (void)user_data;
+    audio_route_cancel();
+}
+
 static void handoff_restart_audio(HandoffRestart how, void *user_data)
 {
     (void)user_data;
@@ -778,6 +784,7 @@ static gboolean on_sigterm(gpointer user_data)
 
 static void cleanup(void)
 {
+    audio_route_shutdown();
     app.stopping = true;
     g_message("Cleaning up...");
 
@@ -922,6 +929,7 @@ int main(int argc, char *argv[])
         .pause_players = handoff_pause_players,
         .resume_players = handoff_resume_players,
         .restart_audio = handoff_restart_audio,
+        .cancel_audio = handoff_cancel_audio,
     };
     app.handoff = handoff_new(&handoff_callbacks, NULL);
     app.link_trace = link_trace_new();

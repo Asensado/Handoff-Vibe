@@ -2,12 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Asensado
 """Handoff service supervisor for its separately licensed Earport backend."""
 import json
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 import os
 from pathlib import Path
 import signal
 import subprocess
 from .lifecycle import acquire_lease, stop_backend
+from .settings import normalize_settings
 import sys
 import tempfile
 import time
@@ -141,7 +142,7 @@ def run_engine(compact, folder, lock, backend_lock):
                     settings = {}
                 # Switching is Handoff's core function. The Start/Pause service
                 # action is its single user-facing control.
-                settings['apple_handoff'] = True
+                settings = normalize_settings(settings)
                 for key, method in [('auto_connect', 'SetAutoConnect'), ('apple_handoff', 'SetAppleHandoff'), ('ear_pause_mode', 'SetEarPauseMode')]:
                     if key in settings:
                         bus.call_sync(owner_name, PATH, INTERFACE, method, (GLib.Variant('(i)', (int(settings[key]),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(settings[key]),))),
@@ -171,12 +172,19 @@ def run_engine(compact, folder, lock, backend_lock):
         return True
 
     def tick():
-        nonlocal refreshing
+        nonlocal refreshing, result, stopping
         if refreshing:
             return True
         refreshing = True
         try:
             return refresh()
+        except Exception as error:
+            # No GLib callback is allowed to silently abandon supervision.
+            result = 1
+            stopping = True
+            print('Handoff supervision failed: ' + str(error), file=sys.stderr)
+            loop.quit()
+            return False
         finally:
             refreshing = False
 
@@ -186,18 +194,32 @@ def run_engine(compact, folder, lock, backend_lock):
         loop.quit()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    GLib.timeout_add_seconds(2, tick)
-    # Publish transitions immediately; a short switch can be missed by polling.
-    subscription = bus.signal_subscribe(BUS, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
-                                        PATH, None, Gio.DBusSignalFlags.NONE, lambda *_: tick())
+    timer = None
+    subscription = None
     try:
+        timer = GLib.timeout_add_seconds(2, tick)
+        # Publish transitions immediately, but never recursively run the refresh.
+        subscription = bus.signal_subscribe(BUS, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
+                                            PATH, None, Gio.DBusSignalFlags.NONE, lambda *_: tick())
         if tick() and not stopping:
             loop.run()
     finally:
-        bus.signal_unsubscribe(subscription)
-        stop_backend(child)
-        log.close()
-        save(dict(updated=time.time(), ready=False, backend='earport', error='' if result == 0 else 'Bluetooth backend failed; see Advanced logs.'))
+        if timer is not None:
+            with suppress(Exception):
+                if GLib.MainContext.default().find_source_by_id(timer):
+                    GLib.source_remove(timer)
+        if subscription is not None:
+            with suppress(Exception):
+                bus.signal_unsubscribe(subscription)
+        try:
+            stop_backend(child)
+        finally:
+            log.close()
+        try:
+            save(dict(updated=time.time(), ready=False, backend='earport',
+                      error='' if result == 0 else 'Bluetooth backend failed; see Advanced logs.'))
+        except OSError as error:
+            print('Could not write final Handoff status: ' + str(error), file=sys.stderr)
     return result
 
 

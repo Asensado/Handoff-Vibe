@@ -7,7 +7,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {statusFor, protocolFromProperties, unpack} from './state.js';
+import {statusFor, protocolFromProperties, unpack, commandMatches} from './state.js';
 import {ProximityCard} from './earport/proximityCard.js';
 
 const BUS = 'io.github.anoryth.EarPort';
@@ -143,20 +143,39 @@ export default class HandoffVibeStatus extends Extension {
     }
 
     _callBackend(method, parameters = null) {
-        if (!this._proxy?.get_name_owner()) {
+        const owner = this._proxy?.get_name_owner();
+        const selected = this._config?.selected;
+        if (!owner || !selected) {
             Main.notify('Handoff Vibe', 'Start Handoff before using headset controls.');
             return;
         }
-        this._proxy.call(method, parameters, Gio.DBusCallFlags.NO_AUTO_START, 4000,
-            this._cancellable, (proxy, result) => {
-                if (this._cancellable?.is_cancelled() || !this._button)
+        const connection = this._proxy.get_connection();
+        const cancellable = this._cancellable;
+        connection.call(owner, PATH, 'org.freedesktop.DBus.Properties', 'GetAll',
+            new GLib.Variant('(s)', [IFACE]), null, Gio.DBusCallFlags.NO_AUTO_START, 4000,
+            cancellable, (bus, result) => {
+                if (cancellable.is_cancelled() || !this._button)
                     return;
                 try {
-                    proxy.call_finish(result);
+                    const properties = unpack(bus.call_finish(result))[0];
+                    if (this._config?.selected !== selected || this._proxy?.get_name_owner() !== owner ||
+                        !commandMatches(this._config, properties))
+                        throw new Error('The headset service changed. Refresh before sending a command.');
+                    // Target the verified unique owner, never a replacement well-known name.
+                    bus.call(owner, PATH, IFACE, method, parameters, null,
+                        Gio.DBusCallFlags.NO_AUTO_START, 4000, cancellable, (source, reply) => {
+                            if (cancellable.is_cancelled() || !this._button)
+                                return;
+                            try {
+                                source.call_finish(reply);
+                            } catch (error) {
+                                Main.notify('Handoff Vibe', error.message);
+                            }
+                            this._paint();
+                        });
                 } catch (error) {
                     Main.notify('Handoff Vibe', error.message);
                 }
-                this._paint();
             });
     }
 

@@ -10,6 +10,15 @@ export function unpack(value) {
     return value;
 }
 
+// Used again immediately before command dispatch, not just when painting.
+export function commandMatches(config, properties) {
+    const selected = config?.selected;
+    const address = unpack(properties)?.DeviceAddress;
+    return !config?.cli_mode && typeof selected === 'string' &&
+        /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(selected) &&
+        typeof address === 'string' && address.toUpperCase() === selected.toUpperCase();
+}
+
 // The live control service is the source of truth when available. In
 // particular, "other" means Handoff even when systemd polling lags behind.
 export function protocolFromProperties(config, properties, now) {

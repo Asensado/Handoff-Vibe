@@ -33,6 +33,8 @@ typedef struct {
     void (*resume_players)(void *user_data);
     /* Restart what plays here to the AirPods, so that they switch back */
     void (*restart_audio)(HandoffRestart how, void *user_data);
+    /* Cancel in-flight route work on superseding remote ownership. */
+    void (*cancel_audio)(void *user_data);
 } HandoffCallbacks;
 
 typedef struct Handoff Handoff;

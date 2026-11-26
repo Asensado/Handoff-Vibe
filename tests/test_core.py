@@ -46,6 +46,10 @@ class PreparationTests(unittest.TestCase):
         result = helper.prepared_config(original)
         self.assertEqual(result, '# hello\n[General]\nDeviceID = bluetooth:004C:0000:0000\nName = Laptop\n[Policy]\nAutoEnable = true\n')
         self.assertEqual(helper.prepared_config(result), result)
+    def test_correct_device_id_lower_in_section_does_not_rewrite(self):
+        text = '[General]\nName=Laptop\nDeviceID=bluetooth:004C:0000:0000\n[Policy]\nAutoEnable=true\n'
+        self.assertEqual(helper.prepared_config(text), text)
+
     def test_add_missing_section(self):
         self.assertIn('[General]\nDeviceID = bluetooth:004C:0000:0000', helper.prepared_config('[Policy]\nAutoEnable = true\n'))
     def test_duplicate_active_settings_removed(self):
@@ -146,73 +150,14 @@ class MigrationTests(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
-class RestoreTests(unittest.TestCase):
-    def fixture(self, home):
-        config_dir = home / '.config/handoff'
-        backup = config_dir / 'backups/original'
-        backup.mkdir(parents=True)
-        executable = home / 'original/airpods-handoff'
-        executable.parent.mkdir()
-        executable.write_text('#!/bin/sh\nexit 0\n')
-        executable.chmod(0o755)
-        text = f'[Unit]\nDescription=Powerbeats Fit Linux-Apple Handoff\n[Service]\nExecStart={executable} AA:BB:CC:DD:EE:FF\n'
-        (backup / 'airpods-handoff.service').write_text(text)
-        (backup / 'state.json').write_text(json.dumps(dict(mac='AA:BB:CC:DD:EE:FF', enabled=True, active=True)))
-        d = dict(mac='AA:BB:CC:DD:EE:FF', model='powerbeatsfit', name='Powerbeats Fit')
-        return config_dir, dict(devices=[d], selected=d['mac'], migration_backup=str(backup)), text, executable
-
-    def test_restore_exact_original_and_persist_cli_mode(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            directory, config, text, _ = self.fixture(home)
-            commands=[]
-            with patch.object(Path,'home',return_value=home), patch.object(B,'CONFIG_DIR',directory), patch.object(B,'save_config'), patch.object(B,'service_state',return_value=dict(ActiveState='active',UnitFileState='enabled')), patch.object(B,'ensure_unit'), patch.object(B,'run',side_effect=lambda args,**_:commands.append(args) or ''):
+class RetiredCliTests(unittest.TestCase):
+    def test_export_api_is_retired_without_touching_services_or_backups(self):
+        config = {'devices': [], 'migration_backup': '/preserved/backup'}
+        with patch.object(B, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'CLI transfer has been retired'):
                 B.restore_cli(config)
-            self.assertEqual((home/'.config/systemd/user/airpods-handoff.service').read_text(),text)
-            self.assertTrue(config['cli_mode'])
-            self.assertIn(['systemctl','--user','start','airpods-handoff.service'],commands)
-
-    def test_missing_original_binary_leaves_gui_untouched(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home=Path(tmp); directory,config,_,executable=self.fixture(home)
-            executable.unlink()
-            with patch.object(Path,'home',return_value=home), patch.object(B,'CONFIG_DIR',directory), patch.object(B,'run') as run:
-                with self.assertRaisesRegex(RuntimeError,'executable is no longer available'): B.restore_cli(config)
-                run.assert_not_called()
-            self.assertFalse(config.get('cli_mode',False))
-
-    def test_cli_start_failure_restores_gui(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home=Path(tmp); directory,config,_,_=self.fixture(home)
-            commands=[]
-            def run(args,**_):
-                commands.append(args)
-                if args == ['systemctl','--user','start','airpods-handoff.service']: raise RuntimeError('CLI failed')
-                return ''
-            with patch.object(Path,'home',return_value=home), patch.object(B,'CONFIG_DIR',directory), patch.object(B,'save_config'), patch.object(B,'ensure_unit'), patch.object(B,'service_state',return_value=dict(ActiveState='active',UnitFileState='enabled')), patch.object(B,'run',side_effect=run):
-                with self.assertRaisesRegex(RuntimeError,'GUI services were restored'): B.restore_cli(config)
-            self.assertFalse((home/'.config/systemd/user/airpods-handoff.service').exists())
-            self.assertFalse(config.get('cli_mode',False))
-            self.assertIn(['systemctl','--user','enable','--now','handoff@AABBCCDDEEFF.service'],commands)
-
-    def test_external_backup_is_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home=Path(tmp); directory,config,_,_=self.fixture(home)
-            config['migration_backup'] = str(home/'outside')
-            with patch.object(Path,'home',return_value=home),patch.object(B,'CONFIG_DIR',directory),patch.object(B,'run') as run:
-                with self.assertRaisesRegex(RuntimeError,'outside the Handoff backup folder'): B.restore_cli(config)
-                run.assert_not_called()
-
-    def test_transition_without_backup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home=Path(tmp); directory,config,_,executable=self.fixture(home)
-            config.pop('migration_backup')
-            with patch.object(Path,'home',return_value=home),patch.object(B,'CONFIG_DIR',directory),patch.object(B,'DAEMON',str(executable)),patch.object(B,'save_config'),patch.object(B,'ensure_unit'),patch.object(B,'service_state',return_value=dict(ActiveState='inactive',UnitFileState='disabled')),patch.object(B,'run',return_value=''):
-                B.restore_cli(config)
-            self.assertTrue(config['cli_mode'])
-            with patch.object(Path,'home',return_value=home):
-                self.assertEqual(B.legacy_device()['mac'], config['selected'])
-            self.assertIn(str(executable),(home/'.config/systemd/user/airpods-handoff.service').read_text())
+            run.assert_not_called()
+        self.assertEqual(config['migration_backup'], '/preserved/backup')
 
 class VerseTests(unittest.TestCase):
     def test_same_local_day_is_stable_and_next_day_changes(self):

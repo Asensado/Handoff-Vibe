@@ -11,6 +11,19 @@ import tempfile
 
 
 def prepared_config(text):
+    # Preserve an already-correct effective assignment, wherever it sits.
+    section = None
+    active = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.fullmatch(r'\[[^]]+\]', stripped):
+            section = stripped.lower()
+        elif section == '[general]':
+            match = re.match(r'^\s*DeviceID\s*=\s*(.*?)\s*$', line, re.I)
+            if match:
+                active.append(match[1].lower())
+    if active == ['bluetooth:004c:0000:0000']:
+        return text
     lines = text.splitlines(keepends=True)
     output = []
     section = None

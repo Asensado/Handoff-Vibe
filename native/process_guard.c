@@ -15,6 +15,10 @@
 
 int handoff_process_guard(void)
 {
+    if (geteuid() == 0) {
+        fprintf(stderr, "Run the headset backend as a regular desktop user\n");
+        return -1;
+    }
     const char *parent = getenv("HANDOFF_SUPERVISOR_PID");
     if (parent) {
         char *end;

@@ -1,9 +1,11 @@
 [Unit]
-Description=Update Handoff Vibe from its GitHub stable releases
-After=network-online.target
-Wants=network-online.target
+Description=Reject legacy unsigned Handoff update requests
 
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/handoff/update-handoff run-automatic
-TimeoutStartSec=900
+TimeoutStartSec=10
+NoNewPrivileges=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true

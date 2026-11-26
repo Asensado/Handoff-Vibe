@@ -36,6 +36,7 @@ export class ProximityCard {
         this._chargingIcon = chargingIcon;
         this._onConnect = onConnect;
         this._card = null;
+        this._fading = new Set();
         this._wasOpen = false;
         this._shownUs = 0;
         this._timeoutId = 0;
@@ -63,6 +64,11 @@ export class ProximityCard {
         this._stopTimeout();
         this._card?.destroy();
         this._card = null;
+        for (const card of this._fading) {
+            card.remove_all_transitions();
+            card.destroy();
+        }
+        this._fading.clear();
     }
 
     _show() {
@@ -164,11 +170,17 @@ export class ProximityCard {
         this._stopTimeout();
         const card = this._card;
         this._card = null;
-        card?.ease({
+        if (!card)
+            return;
+        this._fading.add(card);
+        card.ease({
             opacity: 0,
             duration: FADE_MS,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            onComplete: () => card.destroy(),
+            onComplete: () => {
+                if (this._fading.delete(card))
+                    card.destroy();
+            },
         });
     }
 

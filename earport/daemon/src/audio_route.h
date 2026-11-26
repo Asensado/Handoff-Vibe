@@ -1,29 +1,12 @@
-/*
- * SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-FileCopyrightText: 2024 EarPort Contributors
- *
- * Gets this computer's sound back to the AirPods after another device had
- * them. While an Apple device plays, the AirPods stop this computer's
- * stream and PipeWire leaves the AirPods output in error; a stream still
- * playing stays silent until it is recreated. Moving the streams to a muted
- * output and straight back restarts it: the AirPods then switch back to
- * this computer, as when a Mac starts playing.
- *
- * Done with pactl (PipeWire's PulseAudio tools), so that the service needs
- * nothing more than GLib; without it, the sound just doesn't come back on
- * its own.
- */
-
+ * SPDX-FileCopyrightText: 2026 Asensado */
 #ifndef AUDIO_ROUTE_H
 #define AUDIO_ROUTE_H
-
 #include <stdbool.h>
-
-/* Restart the sound to the AirPods with this address (asynchronous, at most
- * one at a time). mode: "streams" restarts the streams playing to them, if
- * any; "output" suspends and resumes their output (after an early restart,
- * PipeWire may take it for playing while the AirPods still play from
- * elsewhere); "any": the streams, or the output when nothing plays */
+/* Bounded native sink refresh. "streams" requires an uncorked local stream;
+ * "any" / "output" are explicit user recovery. No temporary sinks or profiles. */
 void audio_route_restart(const char *airpods_address, const char *mode);
-
-#endif /* AUDIO_ROUTE_H */
+bool audio_route_cancel(void);
+void audio_route_shutdown(void);
+#endif

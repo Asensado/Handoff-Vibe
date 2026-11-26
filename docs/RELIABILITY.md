@@ -62,9 +62,10 @@ Next, isolate transport events behind a Handoff adapter and move ownership polic
 out of the protocol daemon. The policy needs explicit local playback/manual
 intent, remote media/call telemetry, a generation for each request, confirmation
 deadlines and bounded repair. A stale callback or repair subprocess must not
-override a newer remote owner. Routing repair needs cancellable operations and
-late PipeWire card discovery, without profile cycling or restarting Bluetooth
-globally. Preserve battery/ANC controls while remote playback owns audio.
+override a newer remote owner. The reviewed native audio repair now uses cancellable, deadline-bound pactl
+operations and fresh sink discovery, with no temporary sinks, stream moves or
+profile cycling. Its effectiveness on each physical headset still needs testing.
+Further routing policy must avoid restarting Bluetooth globally. Preserve battery/ANC controls while remote playback owns audio.
 
 Only then replace the adapter's Earport implementation module by module. Keep
 corresponding source, attribution and GPL obligations for reused protocol code.

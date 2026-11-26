@@ -285,7 +285,8 @@ static GVariant *get_property(GDBusConnection *connection G_GNUC_UNUSED,
     } else if (g_strcmp0(property_name, "DeviceName") == 0) {
         result = g_variant_new_string(state->device_name ? state->device_name : "");
     } else if (g_strcmp0(property_name, "DeviceAddress") == 0) {
-        result = g_variant_new_string(state->device_address ? state->device_address : "");
+        result = g_variant_new_string(state->device_address ? state->device_address :
+            (g_getenv("HANDOFF_DEVICE_ADDRESS") ? g_getenv("HANDOFF_DEVICE_ADDRESS") : ""));
     } else if (g_strcmp0(property_name, "DeviceModel") == 0) {
         result = g_variant_new_string(airpods_model_to_string(state->model));
     } else if (g_strcmp0(property_name, "DisplayName") == 0) {

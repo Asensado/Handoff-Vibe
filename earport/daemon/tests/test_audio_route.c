@@ -20,11 +20,11 @@ static GPtrArray *messages;
 
 static const char FAKE_PACTL[] =
     "#!/bin/sh\n"
+    "[ -e \"$FAKE_PACTL_DIR/hang\" ] && exec /bin/sleep 60\n"
     "case \"$1\" in\n"
     "list) [ \"$2\" = sinks ] && cat \"$FAKE_PACTL_DIR/sinks\" || cat \"$FAKE_PACTL_DIR/inputs\";;\n"
-    "load-module) echo \"$*\" >> \"$FAKE_PACTL_DIR/log\"\n"
-    "  [ -e \"$FAKE_PACTL_DIR/fail-load\" ] && exit 1; echo 42;;\n"
-    "*) echo \"$*\" >> \"$FAKE_PACTL_DIR/log\";;\n"
+    "*) echo \"$*\" >> \"$FAKE_PACTL_DIR/log\"\n"
+    "  [ \"$3\" = 1 ] && [ -e \"$FAKE_PACTL_DIR/fail-suspend\" ] && exit 1; exit 0;;\n"
     "esac\n";
 
 /* pactl list sinks short: the AirPods (7), another pair (8), speakers */
@@ -102,12 +102,7 @@ static void test_streams(void)
     setup(SINKS, INPUTS, false);
     g_autofree char *actions = restart("streams");
     g_assert_true(logged("Restarted the sound playing to the AirPods"));
-    g_assert_cmpstr(actions, ==,
-                    "load-module module-null-sink sink_name=earport_handoff "
-                    "sink_properties=device.description=EarPort\n"
-                    "move-sink-input 20 earport_handoff\n"
-                    "move-sink-input 20 7\n"
-                    "unload-module 42\n");
+    g_assert_cmpstr(actions, ==, "suspend-sink 7 1\nsuspend-sink 7 0\n");
 }
 
 /* Nothing to restart: no AirPods output, or nothing playing to it */
@@ -140,12 +135,54 @@ static void test_output(void)
 }
 
 /* No muted output to go through: given up, streams left alone */
-static void test_load_fails(void)
+static void test_suspend_failure_cleanup(void)
 {
-    setup(SINKS, INPUTS, true);
+    setup(SINKS, INPUTS, false);
+    write_file("fail-suspend", "");
     g_autofree char *actions = restart("streams");
-    g_assert_true(logged("Could not restart the AirPods audio (pactl missing or failing)"));
-    g_assert_null(strstr(actions, "move-sink-input"));
+    g_assert_true(logged("Could not restart"));
+    g_assert_cmpstr(actions, ==, "suspend-sink 7 1\nsuspend-sink 7 0\n");
+    g_autofree char *path = g_build_filename(dir, "fail-suspend", NULL);
+    g_unlink(path);
+}
+
+static void test_hung_command_recovers(void)
+{
+    setup(SINKS, INPUTS, false);
+    write_file("hang", "");
+    gint64 started = g_get_monotonic_time();
+    g_autofree char *failed = restart("streams");
+    g_assert_true(logged("Could not restart"));
+    g_assert_cmpint(g_get_monotonic_time() - started, <, G_USEC_PER_SEC);
+    g_autofree char *path = g_build_filename(dir, "hang", NULL);
+    g_unlink(path);
+    setup(SINKS, INPUTS, false);
+    g_autofree char *next = restart("streams");
+    g_assert_true(logged("Restarted"));
+}
+
+static void test_cancel_cleans_suspended_output(void)
+{
+    setup(SINKS, INPUTS, false);
+    audio_route_restart(AIRPODS, "streams");
+    gint64 end = g_get_monotonic_time() + G_USEC_PER_SEC;
+    g_autofree char *path = g_build_filename(dir, "log", NULL);
+    while (g_get_monotonic_time() < end) {
+        char *text = NULL;
+        g_file_get_contents(path, &text, NULL, NULL);
+        bool suspended = text && strstr(text, "suspend-sink 7 1");
+        g_free(text);
+        if (suspended) break;
+        g_main_context_iteration(NULL, FALSE);
+    }
+    g_assert_true(audio_route_cancel());
+    while (!logged("Audio repair cancelled") && g_get_monotonic_time() < end)
+        g_main_context_iteration(NULL, FALSE);
+    g_assert_true(logged("Audio repair cancelled"));
+    char *actions = NULL;
+    g_file_get_contents(path, &actions, NULL, NULL);
+    g_assert_nonnull(strstr(actions, "suspend-sink 7 0"));
+    g_free(actions);
 }
 
 /* One at a time; no address, nothing */
@@ -157,7 +194,7 @@ static void test_one_at_a_time(void)
 
     audio_route_restart(AIRPODS, "streams");
     g_autofree char *actions = restart("output");
-    g_assert_null(strstr(actions, "suspend-sink"));
+    g_assert_cmpstr(actions, ==, "suspend-sink 7 1\nsuspend-sink 7 0\n");
     guint starts = 0;
     for (guint i = 0; i < messages->len; i++)
         if (g_str_has_prefix(messages->pdata[i], "Restarting the sound"))
@@ -182,11 +219,14 @@ int main(int argc, char **argv)
     g_autofree char *path = g_strdup_printf("%s:%s", dir, g_getenv("PATH"));
     g_setenv("PATH", path, TRUE);
     g_setenv("FAKE_PACTL_DIR", dir, TRUE);
+    g_setenv("FAKE_PACTL_PATH", pactl, TRUE);
 
     g_test_add_func("/audio-route/streams", test_streams);
     g_test_add_func("/audio-route/nothing-playing", test_nothing_playing);
     g_test_add_func("/audio-route/output", test_output);
-    g_test_add_func("/audio-route/load-fails", test_load_fails);
+    g_test_add_func("/audio-route/suspend-failure-cleanup", test_suspend_failure_cleanup);
+    g_test_add_func("/audio-route/hung-command-recovers", test_hung_command_recovers);
+    g_test_add_func("/audio-route/cancel-cleans-output", test_cancel_cleans_suspended_output);
     g_test_add_func("/audio-route/one-at-a-time", test_one_at_a_time);
     int ret = g_test_run();
 

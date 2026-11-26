@@ -72,7 +72,7 @@ Description: Handoff Vibe graphical setup and status for AirPods and Beats
  audio switching status, background service controls, and diagnostic logs.
  Based on xatuke/handoff. Compatible hardware is required.
 ''')
-(STAGE / 'DEBIAN/postinst').write_text('#!/bin/sh\nset -e\nsystemctl daemon-reload 2>/dev/null || true\n')
+(STAGE / 'DEBIAN/postinst').write_text('#!/bin/sh\nset -e\n# Retire unsigned root updates, including opt-ins from older builds.\nrm -f /etc/apt/apt.conf.d/99handoff-vibe-updates /etc/handoff/automatic-updates\nsystemctl daemon-reload 2>/dev/null || true\n')
 (STAGE / 'DEBIAN/postrm').write_text('#!/bin/sh\nset -e\nif [ "$1" = remove ] || [ "$1" = purge ]; then\n  rm -f /etc/apt/apt.conf.d/99handoff-vibe-updates /etc/handoff/automatic-updates\nfi\nsystemctl daemon-reload 2>/dev/null || true\n')
 (STAGE / 'DEBIAN/postinst').chmod(0o755)
 (STAGE / 'DEBIAN/postrm').chmod(0o755)

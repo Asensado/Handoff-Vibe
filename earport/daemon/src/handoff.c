@@ -133,6 +133,8 @@ static void cancel_all(Handoff *handoff)
     cancel(&handoff->restart_id);
     cancel(&handoff->resume_id);
     cancel(&handoff->check_id);
+    if (handoff->callbacks.cancel_audio)
+        handoff->callbacks.cancel_audio(handoff->user_data);
 }
 
 Handoff *handoff_new(const HandoffCallbacks *callbacks, void *user_data)
@@ -170,6 +172,8 @@ void handoff_source_changed(Handoff *handoff, const char *source, bool call)
         cancel(&handoff->restart_id);
         cancel(&handoff->check_id);
         cancel(&handoff->resume_id);
+        if (handoff->callbacks.cancel_audio)
+            handoff->callbacks.cancel_audio(handoff->user_data);
         handoff->call = true;
         g_message("Handoff: another device took the AirPods for a call");
     }
@@ -184,6 +188,8 @@ void handoff_source_changed(Handoff *handoff, const char *source, bool call)
         return;
 
     if (g_strcmp0(source, "other") == 0) {
+        if (handoff->callbacks.cancel_audio)
+            handoff->callbacks.cancel_audio(handoff->user_data);
         /* Taken (again): getting the sound back here would take them from it */
         cancel(&handoff->restart_id);
         cancel(&handoff->resume_id);

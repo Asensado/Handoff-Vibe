@@ -101,6 +101,12 @@ class Handoff(Adw.Application):
         self.demo = args.demo
         self.config = {'devices': [], 'selected': None} if self.demo else B.load_config()
         self.pool = ThreadPoolExecutor(max_workers=1)
+        self.read_pool = ThreadPoolExecutor(max_workers=1)
+        self.setup_pool = ThreadPoolExecutor(max_workers=1)
+        self.closing = False
+        self.logs_pending = False
+        self.logs_timer = None
+        self.preferences_window = None
         self.pending = False
         self.poll_pending = False
         self.current_service = {}
@@ -123,9 +129,11 @@ class Handoff(Adw.Application):
         if not self.demo:
             B.save_config(self.config)
 
-    def job(self, work, done=None, error=None):
+    def job(self, work, done=None, error=None, *, lane="control"):
         def finished(future):
             def deliver():
+                if self.closing:
+                    return GLib.SOURCE_REMOVE
                 try:
                     result = future.result()
                     if done:
@@ -134,7 +142,9 @@ class Handoff(Adw.Application):
                     (error or self.error)(str(exc))
                 return GLib.SOURCE_REMOVE
             GLib.idle_add(deliver)
-        self.pool.submit(work).add_done_callback(finished)
+        pool = {"control": self.pool, "read": self.read_pool, "setup": self.setup_pool}[lane]
+        if not self.closing:
+            pool.submit(work).add_done_callback(finished)
 
     def activate_app(self, *_):
         if hasattr(self, 'window'):
@@ -186,7 +196,7 @@ class Handoff(Adw.Application):
         self.releases_status = label('Release notes from Asensado/Handoff-Vibe', 'dim-label')
         release_box.append(self.releases_status)
         release_box.append(button('Check for updates', lambda *_: self.check_updates()))
-        self.install_update_button = button('Install update', lambda *_: self.install_update())
+        self.install_update_button = button('Open releases', lambda *_: self.install_update())
         self.install_update_button.set_visible(False)
         release_box.append(self.install_update_button)
         release_box.append(Gtk.LinkButton(uri=R.REPOSITORY + '/releases', label='Open GitHub releases'))
@@ -328,13 +338,13 @@ class Handoff(Adw.Application):
         self.last_error = message
         self.banner.set_title('Something needs attention')
         self.banner.set_revealed(True)
-        dialog = Adw.MessageDialog(transient_for=self.window, heading='Couldn’t complete that', body=message)
+        dialog = Adw.MessageDialog(transient_for=self.preferences_window or self.window, heading='Couldn’t complete that', body=message)
         dialog.add_response('close', 'Close')
         dialog.present()
 
     def set_status(self, state, details=None):
         names = {
-            'cli': ('●  CLI mode', 'idle', 'Managed by the command-line version.'),
+            'cli': ('●  Previous installation', 'idle', 'Choose Use Handoff Vibe to adopt this setup.'),
             'handoff': ('●  Handoff', 'switching', 'Audio is playing on another device.'),
             'active': ('●  Active', 'active', 'Ready to follow your audio.'),
             'switching': ('●  Switching audio', 'switching', 'Moving your sound between devices.'),
@@ -448,7 +458,7 @@ class Handoff(Adw.Application):
             self.last_error = message
             self.banner.set_title('Bluetooth or session services unavailable')
             self.banner.set_revealed(True)
-        self.job(work, done, fail)
+        self.job(work, done, fail, lane="read")
         return GLib.SOURCE_CONTINUE
 
     def primary_clicked(self, *_):
@@ -465,7 +475,13 @@ class Handoff(Adw.Application):
             def failed(message):
                 self.migrating = False
                 self.error(message)
-            self.job(lambda: B.migrate_legacy(self.config), moved, failed)
+            def adopt():
+                if B.legacy_device():
+                    return B.migrate_legacy(self.config)
+                updated = dict(self.config, cli_mode=False)
+                B.save_config(updated)
+                self.config.update(updated)
+            self.job(adopt, moved, failed)
             return
         if not self.device:
             self.open_setup()
@@ -595,8 +611,9 @@ class Handoff(Adw.Application):
     def change_engine_setting(self, key, value):
         self.config[key] = value
         self.store()
-        if not self.demo:
-            self.job(lambda: B.engine_setting(key, value), None,
+        if not self.demo and self.device:
+            device = dict(self.device)
+            self.job(lambda: B.engine_setting(key, value, device), None,
                      lambda _: self.toast('Setting saved. Start Handoff to apply it.'))
 
     def change_update_checks(self, enabled):
@@ -604,21 +621,6 @@ class Handoff(Adw.Application):
         self.store()
         if enabled:
             self.check_updates()
-
-    def change_automatic_updates(self, enabled, switch):
-        if getattr(self, '_syncing_updates', False):
-            return
-        switch.set_sensitive(False)
-        def done(_):
-            switch.set_sensitive(True)
-            self.toast('Automatic updates enabled after APT refresh.' if enabled else 'Automatic updates disabled.')
-        def failed(message):
-            self._syncing_updates = True
-            switch.set_active(not enabled)
-            self._syncing_updates = False
-            switch.set_sensitive(True)
-            self.error(message)
-        self.job(lambda: B.run(['pkexec', '/usr/libexec/handoff/update-handoff', 'enable' if enabled else 'disable'], timeout=120), done, failed)
 
     def show_whats_new(self, *_):
         self.releases_window.present()
@@ -635,7 +637,7 @@ class Handoff(Adw.Application):
         def failed(message):
             self._checking_updates = False
             self.releases_status.set_label('Could not check GitHub releases. Check your connection or open the releases page.')
-        self.job(lambda: R.fetch_releases(include_prereleases=True), done, failed)
+        self.job(lambda: R.fetch_releases(include_prereleases=True), done, failed, lane="read")
 
     def show_releases(self, releases):
         self._checking_updates = False
@@ -668,7 +670,7 @@ class Handoff(Adw.Application):
             card.append(description)
             self.release_entries.append(card)
         stable = next((release for release in releases if release.get('channel') == 'stable'), None)
-        newer = bool(stable and R.version_tuple(stable['version']) > R.version_tuple(__version__))
+        newer = bool(stable and R.is_newer(stable['version'], __version__))
         self.update_banner.set_title('Handoff ' + stable['version'] + ' is available' if newer else '')
         self.update_banner.set_revealed(newer)
         self.install_update_button.set_visible(newer)
@@ -676,18 +678,20 @@ class Handoff(Adw.Application):
             self.releases_status.set_label('No release notes have been published yet.')
 
     def install_update(self):
-        self.install_update_button.set_sensitive(False)
-        self.releases_status.set_label('Downloading and installing the latest stable build…')
-        def done(message):
-            self.install_update_button.set_sensitive(True)
-            self.releases_status.set_label(message)
-        def failed(message):
-            self.install_update_button.set_sensitive(True)
-            self.releases_status.set_label(message)
-        self.job(lambda: B.run(['pkexec', '/usr/libexec/handoff/update-handoff', 'run'], timeout=900), done, failed)
+        # Read-only release discovery never authorizes a root package install.
+        Gio.AppInfo.launch_default_for_uri(R.REPOSITORY + '/releases', None)
 
     def preferences(self, *_):
+        if self.preferences_window:
+            self.preferences_window.present()
+            return self.preferences_window
         win = Adw.PreferencesWindow(transient_for=self.window, modal=True, title='Preferences', default_width=400, default_height=580)
+        self.preferences_window = win
+        def closed_preferences(*_):
+            self.preferences_window = None
+            self.extension_switch = None
+            return False
+        win.connect('close-request', closed_preferences)
         page = Adw.PreferencesPage()
         win.add(page)
         connection = Adw.PreferencesGroup(title='Headset connection')
@@ -709,13 +713,11 @@ class Handoff(Adw.Application):
         ear.set_selected(self.config.get('ear_pause_mode', 1))
         ear.connect('notify::selected', lambda choice, _: self.change_engine_setting('ear_pause_mode', choice.get_selected()))
         connection.add(ear)
-        updates = Adw.PreferencesGroup(title='Updates', description='Stable, beta and experimental release notes from GitHub. Automatic installation uses stable builds only.')
+        updates = Adw.PreferencesGroup(title='Updates', description='Release checks are read-only. Install updates manually; automatic installation is disabled until independently authenticated signing is available.')
         page.add(updates)
         item, _ = switch_row('Check for updates on launch', 'Show a banner when a newer stable build is available.', self.config.get('check_updates', True), self.change_update_checks)
         updates.add(item)
-        item, automatic_switch = switch_row('Update after APT refresh', 'Install newer verified GitHub release packages after sudo apt update. Enabling this requires administrator authentication.', Path('/etc/handoff/automatic-updates').exists(), lambda enabled: self.change_automatic_updates(enabled, automatic_switch))
-        automatic_switch.set_sensitive(not self.demo)
-        updates.add(item)
+        updates.add(row('Automatic installation unavailable', 'Unsigned release downloads are never installed as administrator by Handoff.'))
         appearance = Adw.PreferencesGroup(title='Appearance')
         page.add(appearance)
         theme = Adw.ComboRow(title='Theme', model=Gtk.StringList.new(['Follow system', 'Light', 'Dark']))
@@ -737,13 +739,9 @@ class Handoff(Adw.Application):
         er, _ = switch_row('Multiple headset profiles', 'Save more than one headset and switch between them. Only the selected headset is managed at a time.', self.config.get('experimental', False), self.experimental_changed)
         exp.add(er)
         exp.add(row('Add another headset', 'Requires multiple headset profiles.', button('Add', lambda *_: self.add_another(win))))
-        if self.config.get('migration_backup') and not self.config.get('cli_mode'):
+        if self.config.get('migration_backup'):
             group = Adw.PreferencesGroup(title='Previous setup')
-            group.add(row('Restore CLI version', 'Switch back to your original command-line service and startup settings.', button('Restore', lambda *_: self.restore_cli(win))))
-            page.add(group)
-        if not self.config.get('migration_backup') and self.device and not self.config.get('cli_mode'):
-            group = Adw.PreferencesGroup(title='Command-line version')
-            group.add(row('Transition to CLI version', 'Use the packaged command-line engine without GUI management.', button('Switch', lambda *_: self.restore_cli(win))))
+            group.add(row('Migration backup', 'Your previous service files are preserved. CLI transfer is retired.', button('Open backup', lambda *_: self.open_backup())))
             page.add(group)
         integration = Adw.PreferencesGroup(title='GNOME integration')
         page.add(integration)
@@ -835,18 +833,32 @@ class Handoff(Adw.Application):
         self.logbuffer = text.get_buffer()
         scroller.set_child(text)
         self.logbuffer.set_text('Choose and set up a headset to see its service logs.')
-        win.connect('close-request', lambda *_: setattr(self, 'logs_window', None) or False)
+        win.connect('close-request', self.close_logs)
         self.refresh_logs()
-        GLib.timeout_add_seconds(3, self.refresh_logs)
+        self.logs_timer = GLib.timeout_add_seconds(3, self.refresh_logs)
         win.present()
+
+    def close_logs(self, *_):
+        if self.logs_timer is not None:
+            GLib.source_remove(self.logs_timer)
+            self.logs_timer = None
+        self.logs_window = None
+        return False
 
     def refresh_logs(self):
         if not self.logs_window:
             return GLib.SOURCE_REMOVE
         if self.demo:
             self.logbuffer.set_text('DESIGN PREVIEW\n\n[10:42:03] Connected to headset\n[10:42:03] Switching handshake complete\n[10:42:16] Playback started on laptop\n[10:42:16] Claiming audio ownership\n[10:42:17] Audio source: this laptop\n\nThese are sample logs, not live device output.')
-        elif self.device:
-            self.job(lambda: B.read_logs(dict(self.device, legacy=True) if self.config.get('cli_mode') else self.device), lambda text: self.logbuffer.set_text(text or 'No service logs yet.'), lambda message: self.logbuffer.set_text(message) if self.logs_window else None)
+        elif self.device and not self.logs_pending:
+            self.logs_pending = True
+            window, buffer = self.logs_window, self.logbuffer
+            device = dict(self.device, legacy=True) if self.config.get('cli_mode') else dict(self.device)
+            def finished(text):
+                self.logs_pending = False
+                if self.logs_window is window and self.device and self.device['mac'] == device['mac']:
+                    buffer.set_text(text or 'No service logs yet.')
+            self.job(lambda: B.read_logs(device), finished, finished, lane='read')
         return GLib.SOURCE_CONTINUE
 
     def bluetooth_settings(self, *_):
@@ -870,46 +882,20 @@ class Handoff(Adw.Application):
 
     def render_cli(self):
         self.set_status('cli')
-        self.primary.set_label('Move back to GUI')
+        self.primary.set_label('Use Handoff Vibe')
         self.manage.set_visible(False)
         self.background.set_visible(False)
         self.multi.set_visible(False)
-        self.info.set_label('Your command-line service manages audio switching.')
-
-    def restore_cli(self, preferences=None):
-        dialog = Adw.MessageDialog(transient_for=preferences or self.window, heading='Switch to the CLI version?', body='Handoff Vibe will stop its GUI-managed services and restore your original service and startup settings when a backup exists. Otherwise it will create a CLI service using the packaged engine, which requires keeping this package installed. You can move back to the GUI later.')
-        dialog.add_response('cancel', 'Cancel')
-        dialog.add_response('restore', 'Switch to CLI')
-        dialog.set_default_response('cancel')
-        def response(_, answer):
-            if answer != 'restore': return
-            if preferences: preferences.close()
-            if self.demo:
-                self.config['cli_mode'] = True
-                self.render_cli()
-                self.toast('Preview only. No services were changed.')
-                return
-            self.migrating = True
-            self.window.set_sensitive(False)
-            def done(_):
-                self.migrating = False
-                self.window.set_sensitive(True)
-                self.render_cli()
-                self.toast('CLI service restored. Automatic GUI migration is paused.')
-            def failed(message):
-                self.migrating = False
-                self.window.set_sensitive(True)
-                self.error(message)
-            self.job(lambda: B.restore_cli(self.config), done, failed)
-        dialog.connect('response', response)
-        dialog.present()
-        return dialog
+        self.info.set_label('A previous installation was saved. CLI transfer is retired.')
 
     def check_extension(self, *_, quiet=False):
         if self.demo:
             self.toast('Preview only. The GNOME extension was not changed.')
             return
+        switch = self.extension_switch
         def done(enabled):
+            if not self.preferences_window or self.extension_switch is not switch:
+                return
             self.syncing_extension = True
             self.extension_switch.set_active(enabled)
             self.syncing_extension = False
@@ -921,11 +907,18 @@ class Handoff(Adw.Application):
         if self.demo:
             self.toast('Preview only. The GNOME extension was not changed.')
             return
-        self.extension_switch.set_sensitive(False)
+        switch = self.extension_switch
+        if not self.preferences_window or switch is None:
+            return
+        switch.set_sensitive(False)
         def done(_):
+            if self.extension_switch is not switch:
+                return
             self.extension_switch.set_sensitive(True)
             self.toast('Top-bar status enabled.' if enabled else 'Top-bar status disabled.')
         def failed(message):
+            if self.extension_switch is not switch:
+                return
             self.extension_switch.set_sensitive(True)
             self.syncing_extension = True
             self.extension_switch.set_active(not enabled)
@@ -935,17 +928,28 @@ class Handoff(Adw.Application):
 
     def close_main(self, *_):
         if self.setup:
+            if self.setup.busy:
+                self.toast('Finish or cancel the current setup operation before closing.')
+                return True
             self.setup.close()
         if self.demo or self.config.get('cli_mode') or not self.config['devices']:
             return False
         # Keep autostart-enabled engines alive. Stop sessions started by this UI.
         def work():
             for d in list(self.config['devices']):
-                if B.service_state(d).get('UnitFileState') != 'enabled':
+                state = B.service_state(d)
+                if state.get('UnitFileState') != 'enabled' and state.get('ActiveState') in ('active', 'activating'):
                     B.service_action(d, 'stop')
         self.window.set_sensitive(False)
         self.job(work, lambda *_: self.quit(), lambda message: (self.window.set_sensitive(True), self.error(message)))
         return True
+    def do_shutdown(self):
+        self.closing = True
+        self.close_logs()
+        for pool in (self.pool, self.read_pool, self.setup_pool):
+            pool.shutdown(wait=False, cancel_futures=True)
+        Adw.Application.do_shutdown(self)
+
 
 
 class Setup(Adw.Window):
@@ -1162,7 +1166,7 @@ class Setup(Adw.Window):
         def failed(message):
             self.scan_button.set_sensitive(True)
             self.help.set_label(message)
-        self.app.job(work, done, failed)
+        self.app.job(work, done, failed, lane="setup")
 
     def scan_refresh(self):
         if self.closed or self.stage_index != 1 or not self.scanning:
@@ -1201,7 +1205,7 @@ class Setup(Adw.Window):
             if not Path(B.HELPER).exists():
                 failed('Install the Debian package to enable guided Bluetooth preparation.')
             else:
-                self.app.job(lambda: B.run(['pkexec', B.HELPER], timeout=120), done, failed)
+                self.app.job(lambda: B.run(['pkexec', B.HELPER], timeout=120), done, failed, lane='setup')
         elif self.stage_index == 1:
             if not self.selected:
                 return
@@ -1256,7 +1260,7 @@ class Setup(Adw.Window):
             self.next.set_sensitive(True)
             self.back.set_sensitive(True)
             self.help.set_label('Couldn’t finish: ' + message + ' You can pair in Bluetooth settings and retry.')
-        self.app.job(work, done, failed)
+        self.app.job(work, done, failed, lane="setup")
 
     def go_back(self, *_):
         if self.busy:
