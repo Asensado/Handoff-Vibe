@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
 """Stable, native About navigation with a personal message on its own page."""
 import gi
 gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1')
@@ -24,7 +26,9 @@ class About(Adw.Window):
         icon.set_pixel_size(90)
         home.append(icon)
         home.append(self.text('Handoff Vibe', 'title-1'))
-        home.append(self.text('0.1.0', 'dim-label'))
+        home.append(self.text('0.2.0', 'dim-label'))
+        self.license_text = self.text('GPLv3 or later · Free software', 'caption dim-label')
+        home.append(self.license_text)
         home.append(self.text('Made with ❤️ by', 'dim-label'))
         home.append(Gtk.LinkButton(uri=AUTHOR_URL, label='Asensado', halign=Gtk.Align.CENTER))
         home.append(self.text('with ChatGPT 6.1-Sol Medium Work', 'caption dim-label'))
@@ -39,10 +43,11 @@ class About(Adw.Window):
         details = self.page('details')
         details.append(self.text('Details', 'title-1'))
         for heading, body, uri in [
+            ('Bluetooth backend and GNOME components', 'EarPort Contributors (Anoryth/earport), GPL-3.0-or-later; original notices and source retained.', 'https://github.com/Anoryth/earport'),
             ('Original audio switching engine', 'Aayushman Choudhary (xatuke) and Handoff contributors', 'https://github.com/xatuke/handoff'),
             ('Design inspiration', 'Packet by nozwock, Dominik Baran, and contributors', 'https://github.com/nozwock/packet'),
             ('Device identification research', 'LibrePods and CAPod contributors', 'https://github.com/kavishdevar/librepods'),
-            ('License', 'PolyForm Noncommercial 1.0.0 for Asensado’s additions. The original engine remains MIT. Commercial use outside the license terms needs separate permission. Apple and Beats photos belong to their owners.', 'https://polyformproject.org/licenses/noncommercial/1.0.0'),
+            ('License', 'GNU GPL version 3 or later. Personal, commercial and educational use is allowed. Preserve license and attribution notices, and provide corresponding source when distributing covered binaries or modifications. Original MIT components retain their MIT terms.', 'https://www.gnu.org/licenses/gpl-3.0.html'),
             ('Daily verses', 'World English Bible (WEB), public domain. A 31-verse offline rotation changes with your local calendar date.', 'https://worldenglish.bible/'),
         ]:
             details.append(self.text(heading, 'heading'))

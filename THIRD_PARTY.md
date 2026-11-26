@@ -3,8 +3,8 @@
 Original audio engine: [xatuke/handoff](https://github.com/xatuke/handoff),
 Aayushman Choudhary and contributors. Based on installed commit
 `4568bde6f19efe480bdc0e26058f49998bb58912`. Its README declares MIT licensing;
-that checkout contains no separate license file. The original engine is retained in `upstream/` with MIT attribution.
-A separately licensed integration patch in `patches/` adds GUI status telemetry, address validation, a per-device process
+that checkout contains no separate license file. The engine remains in `upstream/`.
+Local changes add GUI status telemetry, address validation, a per-device process
 lock, initialized packet state, capped reconnect arithmetic, refreshed audio
 sink discovery, and a fixed locale for the upstream audio-status parser.
 
@@ -19,11 +19,11 @@ Device identifier research (constant values and protocol layout only, no copied 
 [LibrePods BLEManager](https://github.com/kavishdevar/librepods/blob/main/android/app/src/main/java/me/kavishdevar/librepods/bluetooth/BLEManager.kt)
 and [CAPod Apple device descriptions](https://github.com/d4rken-org/capod/tree/main/app/src/main/java/eu/darken/capod/pods/core/apple/ble/devices).
 
-Product photos: Apple and Beats, downloaded from Apple's public product-image
-CDN. Exact per-model URLs are in `assets/sources.json`. The photos are not
-licensed for redistribution by this project and remain the property of Apple/Beats. This
-local prototype includes them for device identification. Review asset rights
-before public redistribution. The UI does not request images over the network.
+Device artwork: version 0.2.0 replaces the previous manufacturer photos with
+original, logo-free GPL-3.0-or-later illustrations by Asensado. Editable SVGs,
+the renderer and the source/license manifest are included under
+assets/illustrations/, packaging/render-device-art.py and assets/sources.json.
+Apple and Beats names remain their owners' trademarks; no affiliation is claimed.
 
 Eligibility references:
 - https://support.apple.com/en-gb/104988
@@ -42,5 +42,5 @@ network requests. Publisher copyright status: https://worldenglish.bible/.
 Creator profile: https://github.com/Asensado/
 The historical internal application ID is retained solely for upgrade continuity.
 
-Asensado’s additions use PolyForm Noncommercial 1.0.0. The original engine
-remains MIT; see LICENSE, NOTICE, LICENSING.md, and LICENSES/MIT-upstream.txt.
+
+Earport Bluetooth backend and proximity card: https://github.com/Anoryth/earport, GPL-3.0-or-later. Source, local modifications, attribution, and license are in earport/ and gnome-extension/earport/. Proximity card idea: https://github.com/OscarHickman/earport.

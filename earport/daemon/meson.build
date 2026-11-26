@@ -1,0 +1,321 @@
+project('earport-daemon', 'c',
+    version: '0.8.0',
+    license: 'GPL-3.0-or-later',
+    default_options: [
+        'c_std=c11',
+        'warning_level=2',
+    ]
+)
+
+# Expose the project version to the sources (single source of truth)
+add_project_arguments(
+    '-DEARPORT_VERSION="@0@"'.format(meson.project_version()),
+    language: 'c'
+)
+
+# Dependencies
+glib_dep = dependency('glib-2.0', version: '>= 2.56')
+gio_dep = dependency('gio-2.0', version: '>= 2.56')
+gio_unix_dep = dependency('gio-unix-2.0', version: '>= 2.56')
+# Only the BlueZ headers are needed (socket structures): not linking to
+# libbluetooth keeps prebuilt binaries portable
+bluetooth_dep = dependency('bluez', required: false)
+
+cc = meson.get_compiler('c')
+m_dep = cc.find_library('m', required: false)
+
+# Without the bluez pkg-config file, just check the headers are there
+if bluetooth_dep.found()
+    bluetooth_dep = bluetooth_dep.partial_dependency(compile_args: true, includes: true)
+else
+    cc.check_header('bluetooth/l2cap.h', required: true)
+    bluetooth_dep = declare_dependency()
+endif
+
+# HD microphone: FFmpeg's AAC decoder (the system's) and a PipeWire source
+avcodec_dep = dependency('libavcodec', required: get_option('hd_mic'))
+avutil_dep = dependency('libavutil', required: get_option('hd_mic'))
+pipewire_dep = dependency('libpipewire-0.3', required: get_option('hd_mic'))
+hd_mic_deps = []
+if avcodec_dep.found() and avutil_dep.found() and pipewire_dep.found()
+    hd_mic_deps = [avcodec_dep, avutil_dep, pipewire_dep,
+                   declare_dependency(compile_args: '-DHAVE_HD_MIC')]
+endif
+summary('HD microphone', hd_mic_deps.length() > 0, bool_yn: true)
+
+# BlueZ battery provider interface (GNOME shows the battery natively)
+gnome = import('gnome')
+battery_provider_gen = gnome.gdbus_codegen('bluez-battery-provider',
+    sources: 'data/org.bluez.BatteryProvider1.xml',
+    interface_prefix: 'org.bluez.',
+    namespace: 'Bluez',
+)
+
+# Source files
+sources = files(
+    'src/main.c',
+    'src/airpods_state.c',
+    'src/airpods_settings.c',
+    'src/aap_link.c',
+    'src/aap_protocol.c',
+    'src/aes128.c',
+    'src/apple_identity.c',
+    'src/audio_route.c',
+    'src/autoconnect.c',
+    'src/battery_estimator.c',
+    'src/battery_provider.c',
+    'src/ble_proximity.c',
+    'src/ble_scanner.c',
+    'src/bluetooth.c',
+    'src/bluez_monitor.c',
+    'src/config.c',
+    'src/controls.c',
+    'src/device.c',
+    'src/dbus_service.c',
+    'src/handoff.c',
+    'src/hd_mic.c',
+    'src/idle.c',
+    'src/link_trace.c',
+    'src/relink.c',
+    'src/tipi.c',
+    'src/media_control.c',
+    'src/research.c',
+    'src/sleep_pause.c',
+)
+
+# Build executable
+executable('earport-daemon',
+    sources, battery_provider_gen,
+    dependencies: [glib_dep, gio_dep, gio_unix_dep, bluetooth_dep, m_dep, hd_mic_deps],
+    install: true,
+    install_dir: get_option('bindir'),
+)
+
+# Tests
+if hd_mic_deps.length() > 0
+    test_hd_mic = executable('test-hd-mic',
+        files('tests/test_hd_mic.c', 'src/hd_mic.c', 'src/aap_protocol.c'),
+        include_directories: include_directories('src'),
+        dependencies: [glib_dep, m_dep, hd_mic_deps],
+    )
+    test('hd-mic', test_hd_mic)
+endif
+
+test_aap_protocol = executable('test-aap-protocol',
+    files('tests/test_aap_protocol.c', 'src/aap_protocol.c', 'src/airpods_settings.c', 'src/airpods_state.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep],
+)
+test('aap-protocol', test_aap_protocol)
+
+test_airpods_settings = executable('test-airpods-settings',
+    files('tests/test_airpods_settings.c', 'src/airpods_settings.c', 'src/airpods_state.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep],
+)
+test('airpods-settings', test_airpods_settings)
+
+test_battery_estimator = executable('test-battery-estimator',
+    files('tests/test_battery_estimator.c', 'src/battery_estimator.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, m_dep],
+)
+test('battery-estimator', test_battery_estimator)
+
+test_aes128 = executable('test-aes128',
+    files('tests/test_aes128.c', 'src/aes128.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep],
+)
+test('aes128', test_aes128)
+
+test_ble_proximity = executable('test-ble-proximity',
+    files('tests/test_ble_proximity.c', 'src/ble_proximity.c', 'src/aes128.c',
+          'src/airpods_state.c', 'src/airpods_settings.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep],
+)
+test('ble-proximity', test_ble_proximity)
+
+test_device = executable('test-device',
+    files('tests/test_device.c', 'src/device.c', 'src/aap_protocol.c', 'src/airpods_settings.c',
+          'src/airpods_state.c', 'src/battery_estimator.c', 'src/config.c', 'src/dbus_service.c',
+          'src/media_control.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep, m_dep],
+)
+test('device', test_device)
+
+# The link over a fake transport, with delays shortened (keep in sync with
+# the test)
+test_aap_link = executable('test-aap-link',
+    files('tests/test_aap_link.c', 'tests/fake_bluetooth.c', 'src/aap_link.c',
+          'src/aap_protocol.c', 'src/research.c', 'src/airpods_settings.c', 'src/airpods_state.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DSEND_GAP_MS=2', '-DHANDSHAKE_DELAY_MS=4', '-DNOTIF_RETRY_INTERVAL_MS=20',
+             '-DRECONNECT_BASE_DELAY_MS=10', '-DSILENT_RECONNECT_DELAY_MS=30',
+             '-DPROXIMITY_KEYS_DELAY_MS=30', '-DWATCHDOG_SILENCE_MS=600',
+             '-DWATCHDOG_PROBE_TIMEOUT_MS=50', '-DWATCHDOG_CHECK_MS=10'],
+    dependencies: [glib_dep],
+)
+test('aap-link', test_aap_link)
+
+# D-Bus service, controls, device and link together, on a private bus
+test_dbus = executable('test-dbus',
+    files('tests/test_dbus.c', 'tests/fake_bluetooth.c', 'src/aap_link.c', 'src/controls.c',
+          'src/dbus_service.c', 'src/device.c', 'src/aap_protocol.c', 'src/research.c',
+          'src/airpods_settings.c', 'src/airpods_state.c', 'src/battery_estimator.c',
+          'src/config.c', 'src/media_control.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DSEND_GAP_MS=2', '-DHANDSHAKE_DELAY_MS=4'],
+    dependencies: [glib_dep, gio_dep, m_dep],
+)
+test('dbus', test_dbus)
+
+test_config = executable('test-config',
+    files('tests/test_config.c', 'src/config.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep],
+)
+test('config', test_config)
+
+test_media_control = executable('test-media-control',
+    files('tests/test_media_control.c', 'src/media_control.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep],
+)
+test('media-control', test_media_control)
+
+test_idle = executable('test-idle',
+    files('tests/test_idle.c', 'src/idle.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep],
+)
+test('idle', test_idle)
+
+# BlueZ monitoring against a fake org.bluez (tests/fake_bluez.c)
+test_bluez_monitor = executable('test-bluez-monitor',
+    files('tests/test_bluez_monitor.c', 'tests/fake_bluez.c', 'src/bluez_monitor.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DBLUEZ_BUSY_SETTLE_MS=100'],
+    dependencies: [glib_dep, gio_dep],
+)
+test('bluez-monitor', test_bluez_monitor)
+
+test_ble_scanner = executable('test-ble-scanner',
+    files('tests/test_ble_scanner.c', 'tests/fake_bluez.c', 'src/ble_scanner.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep],
+)
+test('ble-scanner', test_ble_scanner)
+
+test_battery_provider = executable('test-battery-provider',
+    files('tests/test_battery_provider.c', 'tests/fake_bluez.c', 'src/battery_provider.c',
+          'src/bluez_monitor.c'),
+    battery_provider_gen,
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep, gio_unix_dep],
+)
+test('battery-provider', test_battery_provider)
+
+test_apple_identity = executable('test-apple-identity',
+    files('tests/test_apple_identity.c', 'tests/fake_bluez.c', 'src/apple_identity.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep, gio_unix_dep],
+)
+test('apple-identity', test_apple_identity)
+
+test_link_trace = executable('test-link-trace',
+    files('tests/test_link_trace.c', 'tests/fake_bluez.c', 'src/link_trace.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep],
+)
+test('link-trace', test_link_trace)
+
+# Against a fake pactl written by the test
+test_audio_route = executable('test-audio-route',
+    files('tests/test_audio_route.c', 'src/audio_route.c'),
+    include_directories: include_directories('src'),
+    dependencies: [glib_dep, gio_dep],
+)
+test('audio-route', test_audio_route)
+
+# Delays shortened (keep in sync with the test)
+test_autoconnect = executable('test-autoconnect',
+    files('tests/test_autoconnect.c', 'tests/fake_bluez.c', 'src/autoconnect.c',
+          'src/ble_scanner.c', 'src/ble_proximity.c', 'src/aes128.c', 'src/config.c',
+          'src/airpods_state.c', 'src/airpods_settings.c', 'src/bluez_monitor.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DSCAN_INTERVAL_MS=300', '-DSCAN_BURST_MS=100', '-DPLAYBACK_WINDOW_MS=150',
+             '-DAUTOCONNECT_COOLDOWN_MS=250', '-DCASE_REFRESH_MS=500',
+             '-DIN_USE_SCAN_INTERVAL_MS=150'],
+    dependencies: [glib_dep, gio_dep, m_dep],
+)
+test('autoconnect', test_autoconnect)
+
+test_sleep_pause = executable('test-sleep-pause',
+    files('tests/test_sleep_pause.c', 'src/sleep_pause.c', 'src/aap_protocol.c',
+          'src/airpods_settings.c', 'src/airpods_state.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DSLEEP_COOL_OFF_MS=1000'],
+    dependencies: [glib_dep],
+)
+test('sleep-pause', test_sleep_pause)
+
+test_handoff = executable('test-handoff',
+    files('tests/test_handoff.c', 'src/handoff.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DHANDOFF_KEEP_MS=100', '-DHANDOFF_PLAY_DELAY_MS=20',
+             '-DHANDOFF_SETTLE_MS=30', '-DHANDOFF_CHECK_MS=80',
+             '-DHANDOFF_RESUME_WINDOW_MS=150'],
+    dependencies: [glib_dep],
+)
+test('handoff', test_handoff)
+
+test_tipi = executable('test-tipi',
+    files('tests/test_tipi.c', 'src/tipi.c', 'src/aap_protocol.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DTIPI_RECONNECT_FIRST_MS=20', '-DTIPI_RECONNECT_NEXT_MS=30',
+             '-DTIPI_RECONNECT_GIVE_UP_MS=150', '-DTIPI_LIST_REPEAT_MS=50',
+             '-DTIPI_SWAP_WINDOW_MS=100', '-DTIPI_ALONE_CHECK_MS=200'],
+    dependencies: [glib_dep],
+)
+test('tipi', test_tipi)
+
+test_relink = executable('test-relink',
+    files('tests/test_relink.c', 'src/relink.c'),
+    include_directories: include_directories('src'),
+    c_args: ['-DRELINK_SETTLE_MS=20', '-DRELINK_PAUSE_MS=10', '-DRELINK_STEP_MS=100'],
+    dependencies: [glib_dep],
+)
+test('relink', test_relink)
+
+# Service files point to the installed daemon (/usr/local/bin by default,
+# /usr/bin for distribution packages)
+service_conf = configuration_data()
+service_conf.set('bindir', get_option('prefix') / get_option('bindir'))
+
+# Install systemd user service
+configure_file(
+    input: 'data/earport-daemon.service.in',
+    output: 'earport-daemon.service',
+    configuration: service_conf,
+    install_dir: get_option('prefix') / 'lib' / 'systemd' / 'user',
+)
+
+# Install D-Bus service file
+configure_file(
+    input: 'data/io.github.anoryth.EarPort.service.in',
+    output: 'io.github.anoryth.EarPort.service',
+    configuration: service_conf,
+    install_dir: get_option('datadir') / 'dbus-1' / 'services',
+)
+
+# Protocol probe for reverse-engineering (not installed):
+#   ninja -C build aap-probe
+executable('aap-probe',
+    files('tools/aap_probe.c'),
+    # The probe still uses libbluetooth's str2ba()
+    dependencies: [bluetooth_dep, cc.find_library('bluetooth', required: false)],
+    build_by_default: false,
+)

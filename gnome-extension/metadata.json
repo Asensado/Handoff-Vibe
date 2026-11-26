@@ -1,8 +1,16 @@
 {
   "uuid": "handoff-vibe@asensado.github.io",
   "name": "Handoff Vibe Status",
-  "description": "Headset audio-switching status in the top bar, with a shortcut to Handoff Vibe.",
-  "shell-version": ["48"],
+  "description": "Handoff top-bar headset menu, live handoff status, AirPods and Beats batteries, noise controls and proximity card.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
   "url": "https://github.com/Asensado/",
-  "version": 1
+  "version": 4,
+  "settings-schema": "org.gnome.shell.extensions.handoff-earport"
 }

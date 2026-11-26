@@ -2,7 +2,7 @@
 Type=Application
 Name=Handoff Vibe
 Comment=Set up seamless audio switching for AirPods and compatible Beats
-Exec=handoff-vibe
+Exec=handoff
 Icon=io.github.asensato.Handoff
 Terminal=false
 Categories=AudioVideo;Audio;

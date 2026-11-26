@@ -1,0 +1,1 @@
+Historical 0.1.0 integration patch; not applied by the 0.2.0 build. Asensado's original additions are also licensed GPL-3.0-or-later in 0.2.0; unchanged MIT source context retains its original MIT permissions.

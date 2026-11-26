@@ -1,0 +1,3 @@
+Source: https://github.com/Anoryth/earport
+Commit: aecd3bc056a8d5609e28ee6acfdbd2f1563b6162
+Local changes: Powerbeats Fit recognition and selected-device filtering.

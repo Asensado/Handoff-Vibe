@@ -17,6 +17,8 @@ shots.mkdir(parents=True, exist_ok=True)
 
 
 def capture(window, name):
+    if os.environ.get('HANDOFF_SKIP_SCREENSHOTS') == '1':
+        return
     # X11 capture is only used in this developer smoke test, never by the app.
     subprocess.run(['import', '-window', str(window.get_surface().get_xid()), str(shots / name)], check=True, timeout=10)
 
@@ -26,6 +28,14 @@ def test_device():
     assert app.window.get_title() == 'Handoff Vibe'
     assert ' · WEB' in app.verse.get_label()
     assert 'Active' in app.pill.get_label()
+    assert app.pages.get_pages().get_n_items() == 1
+    assert app.lookup_action('whats-new') is not None
+    assert app.controls_box.get_margin_top() == 0
+    assert not app.listening_label.get_visible()
+    assert not app.controls_note.get_visible()
+    assert list(app.noise_buttons) == ['anc', 'off', 'transparency']
+    assert app.noise_buttons['transparency'].has_css_class('suggested-action')
+    assert not app.noise_buttons['anc'].has_css_class('suggested-action')
     capture(app.window, 'device-light.png')
     app.apply_theme('dark')
     GLib.timeout_add(350, guarded(test_dark))
@@ -47,6 +57,17 @@ def test_logs():
     app.logs_window.close()
     app.apply_theme('light')
     app.preferences()
+    from handoff_ui import releases as R
+    app.show_releases(R.parse_releases([
+        dict(tag_name='v0.2.0', body='Stable release notes'),
+        dict(tag_name='v0.3.0-beta.1', prerelease=True, body='Beta release notes'),
+        dict(tag_name='v0.4.0-experimental', prerelease=True, body='Experimental notes'),
+    ], include_prereleases=True))
+    assert app.release_entries.get_first_child().has_css_class('release-card')
+    app.show_whats_new()
+    assert app.releases_window.get_visible()
+    app.releases_window.close()
+    assert not app.releases_window.get_visible()
     app.about()
     GLib.timeout_add(350, guarded(test_about))
 
@@ -54,6 +75,7 @@ def test_logs():
 def test_about():
     from handoff_ui.about import MESSAGE, AUTHOR_URL
     assert AUTHOR_URL == 'https://github.com/Asensado/'
+    assert app.about_window.license_text.get_label() == 'GPLv3 or later · Free software'
     assert app.about_window.details_row.get_next_sibling() == app.about_window.message_row
     assert app.about_window.stack.get_visible_child_name() == 'main'
     assert app.about_window.message_text.get_label() == MESSAGE

@@ -1,0 +1,226 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ *
+ * Reconnecting the AirPods on purpose, with the delays shortened in
+ * meson.build (settle: 20 ms, pause: 10 ms, step: 100 ms)
+ */
+
+#include <glib.h>
+
+#include "relink.h"
+#include "test_wait.h"
+
+typedef struct {
+    int disconnects;
+    int connects;
+    int started;
+    int finished;
+} Calls;
+
+/* BlueZ is only asked while a reconnection is announced */
+static void disconnect_airpods(void *user_data)
+{
+    Calls *calls = user_data;
+    g_assert_cmpint(calls->started, ==, calls->finished + 1);
+    calls->disconnects++;
+}
+
+static void connect_airpods(void *user_data)
+{
+    Calls *calls = user_data;
+    g_assert_cmpint(calls->started, ==, calls->finished + 1);
+    calls->connects++;
+}
+
+/* Announced on, then off, never twice in a row */
+static void reconnecting(bool on, void *user_data)
+{
+    Calls *calls = user_data;
+    if (on)
+        calls->started++;
+    else
+        calls->finished++;
+    g_assert_cmpint(calls->started - calls->finished, >=, 0);
+    g_assert_cmpint(calls->started - calls->finished, <=, 1);
+}
+
+static const RelinkCallbacks callbacks = {
+    .disconnect = disconnect_airpods,
+    .connect = connect_airpods,
+    .reconnecting = reconnecting,
+};
+
+static void run_for(guint ms)
+{
+    gint64 end = g_get_monotonic_time() + ms * 1000;
+    while (g_get_monotonic_time() < end)
+        g_main_context_iteration(NULL, FALSE);
+}
+
+/* Twice: disconnect, connect, and again, announced as one reconnection */
+static void test_twice(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    relink_start(relink, 2);
+    g_assert_cmpint(calls.started, ==, 1);
+    WAIT_FOR(calls.disconnects >= 1);
+    g_assert_cmpint(calls.disconnects, ==, 1);
+
+    /* BlueZ signals the disconnection before it is done: wait for its
+     * answer */
+    relink_link_closed(relink);
+    run_for(20);
+    g_assert_cmpint(calls.connects, ==, 0);
+    relink_disconnect_done(relink);
+    WAIT_FOR(calls.connects >= 1);
+    g_assert_cmpint(calls.connects, ==, 1);
+    relink_connect_done(relink, true);
+    relink_link_opened(relink);
+    g_assert_cmpint(calls.finished, ==, 0);
+
+    WAIT_FOR(calls.disconnects >= 2);
+    g_assert_cmpint(calls.disconnects, ==, 2);
+    relink_disconnect_done(relink);
+    WAIT_FOR(calls.connects >= 2);
+    g_assert_cmpint(calls.connects, ==, 2);
+    relink_link_opened(relink);
+    g_assert_cmpint(calls.finished, ==, 1);
+    g_assert_cmpint(calls.started, ==, 1);
+
+    /* Done: the next connections are ordinary ones */
+    relink_link_closed(relink);
+    relink_link_opened(relink);
+    relink_connect_done(relink, false);
+    run_for(50);
+    g_assert_cmpint(calls.disconnects, ==, 2);
+    g_assert_cmpint(calls.connects, ==, 2);
+    relink_free(relink);
+}
+
+/* Connecting fails, or the link closes again: a few more tries */
+static void test_connect_again(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    relink_start(relink, 1);
+    WAIT_FOR(calls.disconnects >= 1);
+    relink_disconnect_done(relink);
+    WAIT_FOR(calls.connects >= 1);
+    g_assert_cmpint(calls.connects, ==, 1);
+    relink_connect_done(relink, false);
+    WAIT_FOR(calls.connects >= 2);
+    g_assert_cmpint(calls.connects, ==, 2);
+    relink_link_closed(relink);
+    WAIT_FOR(calls.connects >= 3);
+    g_assert_cmpint(calls.connects, ==, 3);
+
+    /* No more, and the reconnection ends right away */
+    relink_connect_done(relink, false);
+    g_assert_cmpint(calls.finished, ==, 1);
+    relink_link_closed(relink);
+    run_for(20);
+    g_assert_cmpint(calls.connects, ==, 3);
+    relink_link_opened(relink);
+    g_assert_cmpint(calls.finished, ==, 1);
+    relink_free(relink);
+}
+
+/* The AirPods don't answer: given up, not stuck */
+static void test_give_up(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    relink_start(relink, 1);
+    WAIT_FOR(calls.disconnects >= 1);
+    g_assert_cmpint(calls.disconnects, ==, 1);
+    WAIT_FOR(calls.finished >= 1);
+    g_assert_cmpint(calls.finished, ==, 1);
+
+    /* Closing later changes nothing */
+    relink_link_closed(relink);
+    run_for(30);
+    g_assert_cmpint(calls.connects, ==, 0);
+    relink_free(relink);
+}
+
+/* At once: disconnected right away, then as usual */
+static void test_now(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    relink_start_now(relink, 1);
+    g_assert_cmpint(calls.started, ==, 1);
+    g_assert_cmpint(calls.disconnects, ==, 1);
+    relink_disconnect_done(relink);
+    WAIT_FOR(calls.connects >= 1);
+    g_assert_cmpint(calls.connects, ==, 1);
+    relink_link_opened(relink);
+    g_assert_cmpint(calls.finished, ==, 1);
+    relink_free(relink);
+}
+
+/* Gone before being disconnected: connected back all the same */
+static void test_gone_meanwhile(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    relink_start(relink, 1);
+    relink_link_closed(relink);
+    WAIT_FOR(calls.connects >= 1);
+    g_assert_cmpint(calls.disconnects, ==, 0);
+    g_assert_cmpint(calls.connects, ==, 1);
+    relink_link_opened(relink);
+    g_assert_cmpint(calls.finished, ==, 1);
+    relink_free(relink);
+}
+
+/* Events in any order, at any time: the invariants above hold, and once
+ * nothing happens for longer than a step, the reconnection is over.
+ * Replay a failure with the seed it prints: --seed=R02S... */
+static void test_storm(void)
+{
+    Calls calls = { 0 };
+    Relink *relink = relink_new(&callbacks, &calls);
+
+    for (int i = 1; i <= 600; i++) {
+        switch (g_test_rand_int_range(0, 6)) {
+        case 0: relink_start(relink, g_test_rand_int_range(1, 3)); break;
+        case 1: relink_disconnect_done(relink); break;
+        case 2: relink_connect_done(relink, g_test_rand_bit()); break;
+        case 3: relink_link_opened(relink); break;
+        case 4: relink_link_closed(relink); break;
+        case 5: break;
+        }
+        run_for(g_test_rand_int_range(0, 12));
+
+        if (i % 100 == 0) {
+            /* Settle, then disconnect or connect without answer, then give up
+             * (within 180 ms, given 2 s on a loaded machine) */
+            WAIT_FOR(calls.started == calls.finished);
+            g_assert_cmpint(calls.started, ==, calls.finished);
+        }
+    }
+    g_assert_cmpint(calls.started, >, 0);
+    relink_free(relink);
+}
+
+int main(int argc, char *argv[])
+{
+    g_test_init(&argc, &argv, NULL);
+
+    g_test_add_func("/relink/twice", test_twice);
+    g_test_add_func("/relink/connect-again", test_connect_again);
+    g_test_add_func("/relink/give-up", test_give_up);
+    g_test_add_func("/relink/gone-meanwhile", test_gone_meanwhile);
+    g_test_add_func("/relink/now", test_now);
+    g_test_add_func("/relink/storm", test_storm);
+
+    return g_test_run();
+}

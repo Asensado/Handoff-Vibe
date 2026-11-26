@@ -1,0 +1,34 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Handoff Vibe
+Source: https://github.com/Asensado/Handoff-Vibe
+
+Files: *
+Copyright: 2026 Asensado
+License: GPL-3+
+ See the included LICENSE file for GNU GPL version 3. The project permits
+ version 3 or, at your option, any later version.
+
+Files: upstream/*
+Copyright: Aayushman Choudhary (xatuke) and original Handoff contributors
+           2026 Asensado (modifications)
+License: MIT and GPL-3+
+ Original upstream code retains MIT terms. Asensado's modifications are GPL-3+.
+ The MIT text is included in LICENSES/MIT-upstream.txt.
+
+Files: earport/* gnome-extension/earport/*
+Copyright: EarPort Contributors and original contributors named in source headers
+           2026 Asensado (local integration and modifications)
+License: GPL-3+
+ Original notices and complete corresponding source are retained.
+ See earport/LICENSE, earport/CREDITS and earport/UPSTREAM.txt.
+
+Files: assets/*.png assets/illustrations/*
+Copyright: 2026 Asensado
+License: GPL-3+
+ Original logo-free illustrations; preferred SVG source and renderer included.
+ Device names remain their respective owners' trademarks.
+
+Files: assets/verses.json
+Copyright: World English Bible contributors
+License: public-domain
+ The World English Bible translation is public domain. See THIRD_PARTY.md.

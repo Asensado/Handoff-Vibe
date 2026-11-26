@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Handoff Vibe from its GitHub stable releases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/handoff/update-handoff run-automatic
+TimeoutStartSec=900

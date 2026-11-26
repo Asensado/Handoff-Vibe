@@ -8,4 +8,10 @@
     <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin</allow_active></defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/handoff/prepare-bluetooth</annotate>
   </action>
+  <action id="io.github.asensato.Handoff.updates">
+    <description>Manage Handoff Vibe updates</description>
+    <message>Authorize Handoff to install stable updates from Asensado/Handoff-Vibe or change automatic update settings.</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/handoff/update-handoff</annotate>
+  </action>
 </policyconfig>

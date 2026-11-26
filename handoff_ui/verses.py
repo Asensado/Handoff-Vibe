@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
 """Public-domain World English Bible verses, rotated by local calendar day."""
 from datetime import date
 import json

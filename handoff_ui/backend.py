@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
 """BlueZ and systemd integration. All blocking calls run on the GUI's worker."""
 import json
 import os
@@ -5,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import socket
 from gi.repository import Gio, GLib
 from .models import BY_KEY, valid_mac, identify
 
@@ -42,6 +45,9 @@ def load_config():
         data['theme'] = 'system'
     if data.get('selected') not in [d['mac'] for d in data['devices']]:
         data['selected'] = data['devices'][0]['mac'] if data['devices'] else None
+    # The service's Start/Pause action controls core device switching.
+    data['apple_handoff'] = True
+    data.setdefault('auto_connect', False)
     return data
 
 
@@ -137,6 +143,18 @@ def service_state(device):
 
 
 def read_logs(device):
+    runtime = os.environ.get('XDG_RUNTIME_DIR')
+    if runtime and valid_mac(device.get('mac')):
+        path = Path(runtime) / 'handoff' / (device['mac'].replace(':', '').upper() + '.log')
+        try:
+            with path.open('rb') as log:
+                log.seek(0, 2)
+                log.seek(max(0, log.tell() - 65536))
+                text = log.read().decode('utf-8', errors='replace')
+            if text:
+                return text
+        except OSError:
+            pass
     return run(['journalctl', '--user', '-u', unit_for(device), '-n', '220', '--no-pager', '-o', 'short-iso'], timeout=8)
 
 
@@ -148,6 +166,52 @@ def protocol_state(device):
         return json.loads((Path(runtime) / 'handoff' / (device['mac'].replace(':', '') + '.json')).read_text())
     except (OSError, ValueError):
         return {}
+
+
+EARPORT_BUS = 'io.github.anoryth.EarPort'
+EARPORT_PATH = '/io/github/anoryth/EarPort'
+EARPORT_IFACE = 'io.github.anoryth.EarPort1'
+
+
+def engine_call(method, params=None):
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    result = bus.call_sync(EARPORT_BUS, EARPORT_PATH, EARPORT_IFACE, method, params,
+                           None, Gio.DBusCallFlags.NO_AUTO_START, 4000, None)
+    return result.unpack() if result else ()
+
+
+def engine_setting(key, enabled):
+    methods = {'auto_connect': 'SetAutoConnect', 'apple_handoff': 'SetAppleHandoff', 'ear_pause_mode': 'SetEarPauseMode'}
+    if key not in methods:
+        raise ValueError('Unknown headset setting')
+    engine_call(methods[key], GLib.Variant('(i)', (int(enabled),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(enabled),)))
+
+
+def set_noise_control(device, mode):
+    if mode not in ('off', 'anc', 'transparency') or not valid_mac(device.get('mac')):
+        raise ValueError('Invalid noise-control request')
+    state = protocol_state(device)
+    if state.get('backend') == 'earport':
+        engine_call('SetNoiseControlMode', GLib.Variant('(s)', (mode,)))
+        return dict(state, noise_pending=mode)
+    runtime = os.environ.get('XDG_RUNTIME_DIR')
+    if not runtime:
+        raise RuntimeError('Your desktop session is unavailable')
+    path = Path(runtime) / 'handoff' / (device['mac'].replace(':', '').upper() + '.sock')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(4)
+        client.connect(str(path))
+        client.sendall(json.dumps({'command': 'set-noise-control', 'mode': mode}).encode() + b'\n')
+        reply = b''
+        while b'\n' not in reply:
+            chunk = client.recv(4096)
+            if not chunk or len(reply) + len(chunk) > 8192:
+                raise RuntimeError('The headset service returned an invalid response')
+            reply += chunk
+    data = json.loads(reply.split(b'\n', 1)[0])
+    if not data.get('ok'):
+        raise RuntimeError(data.get('error', 'The headset command failed'))
+    return data.get('status', {})
 
 
 def bluetooth_ready(path=Path('/etc/bluetooth/main.conf')):
@@ -424,3 +488,21 @@ def set_extension_enabled(enabled):
         result = extension_call('DisableExtension', GLib.Variant('(s)', (EXTENSION_UUID,)))
     if not result or not result[0]:
         raise RuntimeError('GNOME could not change the extension. Check the Extensions app for compatibility or disabled extensions.')
+
+
+def proximity_settings():
+    folder = (Path('/usr/share/gnome-shell/extensions') / EXTENSION_UUID / 'schemas') if INSTALLED else ROOT / 'gnome-extension/schemas'
+    source = Gio.SettingsSchemaSource.new_from_directory(str(folder), Gio.SettingsSchemaSource.get_default(), False)
+    schema = source.lookup('org.gnome.shell.extensions.handoff-earport', False)
+    if not schema:
+        raise RuntimeError('The GNOME companion schema is unavailable')
+    return Gio.Settings.new_full(schema, None, None)
+
+
+def proximity_enabled():
+    return proximity_settings().get_boolean('proximity-card')
+
+
+def set_proximity_enabled(enabled):
+    proximity_settings().set_boolean('proximity-card', bool(enabled))
+    Gio.Settings.sync()

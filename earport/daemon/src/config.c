@@ -1,0 +1,559 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ *
+ * Configuration file management
+ */
+
+#define _POSIX_C_SOURCE 200809L /* fchmod under -std=c11 */
+
+#include "config.h"
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <glib/gstdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define CONFIG_DIR_NAME "earport"
+#define CONFIG_FILE_NAME "daemon.conf"
+#define CONFIG_GROUP "Settings"
+
+static gchar *get_config_dir(void)
+{
+    const gchar *config_home = g_get_user_config_dir();
+    return g_build_filename(config_home, CONFIG_DIR_NAME, NULL);
+}
+
+static gchar *get_config_path(void)
+{
+    gchar *config_dir = get_config_dir();
+    gchar *config_path = g_build_filename(config_dir, CONFIG_FILE_NAME, NULL);
+    g_free(config_dir);
+    return config_path;
+}
+
+static bool ensure_config_dir(void)
+{
+    gchar *config_dir = get_config_dir();
+    /* It holds the AirPods' keys: for this user only, also when created
+     * earlier with wider permissions */
+    int result = g_mkdir_with_parents(config_dir, 0700);
+    if (result == 0)
+        g_chmod(config_dir, 0700);
+    g_free(config_dir);
+
+    if (result != 0 && errno != EEXIST) {
+        g_warning("Failed to create config directory: %s", g_strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
+void config_get_defaults(EarPortConfig *config)
+{
+    config->ear_pause_mode = 1;  /* EAR_PAUSE_ONE_OUT */
+    config->auto_connect = false;
+    config->apple_handoff = false;
+    config->hd_mic = false;
+    config->stem_track_controls = true;
+    config->research_log = false;
+}
+
+bool config_load(EarPortConfig *config)
+{
+    /* Start with defaults */
+    config_get_defaults(config);
+
+    gchar *config_path = get_config_path();
+    GKeyFile *keyfile = g_key_file_new();
+    GError *error = NULL;
+
+    if (!g_key_file_load_from_file(keyfile, config_path, G_KEY_FILE_NONE, &error)) {
+        /* Only a missing file is replaced: one with a typo keeps the
+         * user's settings for them to fix */
+        if (g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
+            config_save(config);
+        else
+            g_warning("Failed to load config file, using defaults: %s", error->message);
+        g_error_free(error);
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        return true;
+    }
+
+    /* Read settings */
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "ear_pause_mode", NULL)) {
+        config->ear_pause_mode = g_key_file_get_integer(keyfile, CONFIG_GROUP, "ear_pause_mode", NULL);
+
+        /* Validate range */
+        if (config->ear_pause_mode < 0 || config->ear_pause_mode > 2) {
+            config->ear_pause_mode = 1;
+        }
+    }
+
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "auto_connect", NULL))
+        config->auto_connect = g_key_file_get_boolean(keyfile, CONFIG_GROUP, "auto_connect", NULL);
+
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "apple_handoff", NULL))
+        config->apple_handoff = g_key_file_get_boolean(keyfile, CONFIG_GROUP, "apple_handoff", NULL);
+
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "hd_mic", NULL))
+        config->hd_mic = g_key_file_get_boolean(keyfile, CONFIG_GROUP, "hd_mic", NULL);
+
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "stem_track_controls", NULL))
+        config->stem_track_controls = g_key_file_get_boolean(keyfile, CONFIG_GROUP,
+                                                            "stem_track_controls", NULL);
+
+    if (g_key_file_has_key(keyfile, CONFIG_GROUP, "research_log", NULL))
+        config->research_log = g_key_file_get_boolean(keyfile, CONFIG_GROUP, "research_log", NULL);
+
+    g_message("Config loaded: ear_pause_mode=%d auto_connect=%d apple_handoff=%d hd_mic=%d",
+              config->ear_pause_mode, config->auto_connect, config->apple_handoff, config->hd_mic);
+
+    g_key_file_free(keyfile);
+    g_free(config_path);
+    return true;
+}
+
+bool config_save(const EarPortConfig *config)
+{
+    if (!ensure_config_dir()) {
+        return false;
+    }
+
+    GKeyFile *keyfile = g_key_file_new();
+
+    /* Write settings */
+    g_key_file_set_integer(keyfile, CONFIG_GROUP, "ear_pause_mode", config->ear_pause_mode);
+    g_key_file_set_boolean(keyfile, CONFIG_GROUP, "auto_connect", config->auto_connect);
+    g_key_file_set_boolean(keyfile, CONFIG_GROUP, "apple_handoff", config->apple_handoff);
+    g_key_file_set_boolean(keyfile, CONFIG_GROUP, "hd_mic", config->hd_mic);
+    g_key_file_set_boolean(keyfile, CONFIG_GROUP, "stem_track_controls", config->stem_track_controls);
+    /* Hidden option: only kept when set */
+    if (config->research_log)
+        g_key_file_set_boolean(keyfile, CONFIG_GROUP, "research_log", true);
+
+    /* Add comment */
+    g_key_file_set_comment(keyfile, CONFIG_GROUP, NULL,
+                           "EarPort daemon configuration\n"
+                           "ear_pause_mode: 0=disabled, 1=pause when one removed, 2=pause when both removed\n"
+                           "auto_connect: connect when the AirPods are put in or playback starts\n"
+                           "apple_handoff: present this computer as an Apple device, so that the\n"
+                           "  AirPods switch between it and your Apple devices\n"
+                           "hd_mic: an \"AirPods (HD microphone)\" input, without leaving A2DP\n"
+                           "stem_track_controls: double press for the next track, triple press\n"
+                           "  for the previous one",
+                           NULL);
+
+    gchar *config_path = get_config_path();
+    GError *error = NULL;
+
+    if (!g_key_file_save_to_file(keyfile, config_path, &error)) {
+        g_warning("Failed to save config file: %s", error->message);
+        g_error_free(error);
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        return false;
+    }
+
+    g_message("Config saved: ear_pause_mode=%d", config->ear_pause_mode);
+
+    g_key_file_free(keyfile);
+    g_free(config_path);
+    return true;
+}
+
+/* ============================================================================
+ * Per-device listening modes configuration
+ * ========================================================================== */
+
+#define DEVICES_FILE_NAME "devices.conf"
+
+/* Loads a file to change some keys in it: false when it exists but does not
+ * load (a typo), as writing it back would lose all its other keys */
+static bool load_for_update(GKeyFile *keyfile, const char *path, GKeyFileFlags flags)
+{
+    GError *error = NULL;
+    if (g_key_file_load_from_file(keyfile, path, flags, &error))
+        return true;
+    bool missing = g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT);
+    if (!missing)
+        g_warning("Not writing %s, it does not load: %s", path, error->message);
+    g_error_free(error);
+    return missing;
+}
+
+static gchar *get_devices_config_path(void)
+{
+    gchar *config_dir = get_config_dir();
+    gchar *config_path = g_build_filename(config_dir, DEVICES_FILE_NAME, NULL);
+    g_free(config_dir);
+    return config_path;
+}
+
+/* Convert MAC address to group name (replace : with _) */
+static gchar *address_to_group(const char *address)
+{
+    gchar *group = g_strdup(address);
+    for (gchar *p = group; *p; p++) {
+        if (*p == ':') *p = '_';
+    }
+    return group;
+}
+
+/* ============================================================================
+ * Complete device profile management
+ * ========================================================================== */
+
+void config_get_default_profile(DeviceProfile *profile)
+{
+    memset(profile, 0, sizeof(DeviceProfile));
+
+    /* Empty display_name means use device model */
+    profile->display_name[0] = '\0';
+
+    profile->listening_modes = AIRPODS_DEFAULT_LISTENING_MODES;
+
+    /* Default feature settings */
+    profile->conversational_awareness = false;
+    profile->adaptive_noise_level = AIRPODS_DEFAULT_ADAPTIVE_LEVEL;
+
+    profile->has_saved_settings = false;
+}
+
+bool config_load_device_profile(const char *device_address, DeviceProfile *profile)
+{
+    /* Start with defaults */
+    config_get_default_profile(profile);
+
+    if (device_address == NULL || device_address[0] == '\0') {
+        return false;
+    }
+
+    gchar *config_path = get_devices_config_path();
+    GKeyFile *keyfile = g_key_file_new();
+    GError *error = NULL;
+
+    if (!g_key_file_load_from_file(keyfile, config_path, G_KEY_FILE_NONE, &error)) {
+        if (error != NULL) {
+            if (!g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
+                g_warning("Failed to load devices config: %s", error->message);
+            }
+            g_error_free(error);
+        }
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        return false;
+    }
+
+    gchar *group = address_to_group(device_address);
+
+    if (!g_key_file_has_group(keyfile, group)) {
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        g_free(group);
+        return false;
+    }
+
+    /* Read display name */
+    if (g_key_file_has_key(keyfile, group, "display_name", NULL)) {
+        gchar *name = g_key_file_get_string(keyfile, group, "display_name", NULL);
+        if (name) {
+            strncpy(profile->display_name, name, sizeof(profile->display_name) - 1);
+            profile->display_name[sizeof(profile->display_name) - 1] = '\0';
+            g_free(name);
+        }
+    }
+
+    /* Read listening modes */
+    if (g_key_file_has_key(keyfile, group, "listening_mode_off", NULL)) {
+        profile->listening_modes.off_enabled = g_key_file_get_boolean(keyfile, group, "listening_mode_off", NULL);
+    }
+    if (g_key_file_has_key(keyfile, group, "listening_mode_transparency", NULL)) {
+        profile->listening_modes.transparency_enabled = g_key_file_get_boolean(keyfile, group, "listening_mode_transparency", NULL);
+    }
+    if (g_key_file_has_key(keyfile, group, "listening_mode_anc", NULL)) {
+        profile->listening_modes.anc_enabled = g_key_file_get_boolean(keyfile, group, "listening_mode_anc", NULL);
+    }
+    if (g_key_file_has_key(keyfile, group, "listening_mode_adaptive", NULL)) {
+        profile->listening_modes.adaptive_enabled = g_key_file_get_boolean(keyfile, group, "listening_mode_adaptive", NULL);
+    }
+
+    /* Read feature settings */
+    if (g_key_file_has_key(keyfile, group, "conversational_awareness", NULL)) {
+        profile->conversational_awareness = g_key_file_get_boolean(keyfile, group, "conversational_awareness", NULL);
+    }
+    if (g_key_file_has_key(keyfile, group, "adaptive_noise_level", NULL)) {
+        profile->adaptive_noise_level = g_key_file_get_integer(keyfile, group, "adaptive_noise_level", NULL);
+        /* Validate range */
+        if (profile->adaptive_noise_level < 0) profile->adaptive_noise_level = 0;
+        if (profile->adaptive_noise_level > 100) profile->adaptive_noise_level = 100;
+    }
+    if (g_key_file_has_key(keyfile, group, "listening_modes_set", NULL))
+        profile->listening_modes_set = g_key_file_get_boolean(keyfile, group, "listening_modes_set", NULL);
+    if (g_key_file_has_key(keyfile, group, "ca_off_for_mic", NULL))
+        profile->ca_off_for_mic = g_key_file_get_boolean(keyfile, group, "ca_off_for_mic", NULL);
+
+    /* Check if this profile has been explicitly saved */
+    if (g_key_file_has_key(keyfile, group, "has_saved_settings", NULL)) {
+        profile->has_saved_settings = g_key_file_get_boolean(keyfile, group, "has_saved_settings", NULL);
+    }
+
+    g_message("Loaded profile for %s: display_name='%s', ca=%d, adaptive_level=%d",
+              device_address, profile->display_name,
+              profile->conversational_awareness, profile->adaptive_noise_level);
+
+    g_key_file_free(keyfile);
+    g_free(config_path);
+    g_free(group);
+    return true;
+}
+
+bool config_save_device_profile(const char *device_address, const DeviceProfile *profile)
+{
+    if (device_address == NULL || device_address[0] == '\0') {
+        g_warning("Cannot save profile: no device address");
+        return false;
+    }
+
+    if (!ensure_config_dir()) {
+        return false;
+    }
+
+    gchar *config_path = get_devices_config_path();
+    GKeyFile *keyfile = g_key_file_new();
+
+    if (!load_for_update(keyfile, config_path, G_KEY_FILE_KEEP_COMMENTS)) {
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        return false;
+    }
+
+    gchar *group = address_to_group(device_address);
+
+    /* Write display name */
+    g_key_file_set_string(keyfile, group, "display_name", profile->display_name);
+
+    /* Write listening modes */
+    g_key_file_set_boolean(keyfile, group, "listening_mode_off", profile->listening_modes.off_enabled);
+    g_key_file_set_boolean(keyfile, group, "listening_mode_transparency", profile->listening_modes.transparency_enabled);
+    g_key_file_set_boolean(keyfile, group, "listening_mode_anc", profile->listening_modes.anc_enabled);
+    g_key_file_set_boolean(keyfile, group, "listening_mode_adaptive", profile->listening_modes.adaptive_enabled);
+
+    /* Write feature settings */
+    g_key_file_set_boolean(keyfile, group, "conversational_awareness", profile->conversational_awareness);
+    g_key_file_set_integer(keyfile, group, "adaptive_noise_level", profile->adaptive_noise_level);
+    g_key_file_set_boolean(keyfile, group, "has_saved_settings", true);
+    g_key_file_set_boolean(keyfile, group, "listening_modes_set", profile->listening_modes_set);
+    if (profile->ca_off_for_mic)
+        g_key_file_set_boolean(keyfile, group, "ca_off_for_mic", true);
+    else
+        g_key_file_remove_key(keyfile, group, "ca_off_for_mic", NULL);
+
+    GError *error = NULL;
+    if (!g_key_file_save_to_file(keyfile, config_path, &error)) {
+        g_warning("Failed to save device profile: %s", error->message);
+        g_error_free(error);
+        g_key_file_free(keyfile);
+        g_free(config_path);
+        g_free(group);
+        return false;
+    }
+
+    g_message("Saved profile for %s: display_name='%s', ca=%d, adaptive_level=%d",
+              device_address, profile->display_name,
+              profile->conversational_awareness, profile->adaptive_noise_level);
+
+    g_key_file_free(keyfile);
+    g_free(config_path);
+    g_free(group);
+    return true;
+}
+
+double config_load_drain_rate(const char *device_address)
+{
+    if (device_address == NULL || device_address[0] == '\0')
+        return 0;
+
+    gchar *config_path = get_devices_config_path();
+    gchar *group = address_to_group(device_address);
+    GKeyFile *keyfile = g_key_file_new();
+    double rate = 0;
+
+    if (g_key_file_load_from_file(keyfile, config_path, G_KEY_FILE_NONE, NULL) &&
+        g_key_file_has_key(keyfile, group, "drain_rate", NULL)) {
+        rate = g_key_file_get_double(keyfile, group, "drain_rate", NULL);
+        if (rate < 0)
+            rate = 0;
+    }
+
+    g_key_file_free(keyfile);
+    g_free(group);
+    g_free(config_path);
+    return rate;
+}
+
+bool config_save_drain_rate(const char *device_address, double drain_rate)
+{
+    if (device_address == NULL || device_address[0] == '\0' || !ensure_config_dir())
+        return false;
+
+    gchar *config_path = get_devices_config_path();
+    gchar *group = address_to_group(device_address);
+    GKeyFile *keyfile = g_key_file_new();
+    GError *error = NULL;
+
+    /* Only this key: saving the whole profile would mark it as having saved
+     * settings, which are then pushed to the AirPods on every connection */
+    bool ok = load_for_update(keyfile, config_path, G_KEY_FILE_KEEP_COMMENTS);
+    if (ok) {
+        g_key_file_set_double(keyfile, group, "drain_rate", drain_rate);
+        ok = g_key_file_save_to_file(keyfile, config_path, &error);
+    }
+    if (!ok && error != NULL) {
+        g_warning("Failed to save drain rate: %s", error->message);
+        g_error_free(error);
+    }
+
+    g_key_file_free(keyfile);
+    g_free(group);
+    g_free(config_path);
+    return ok;
+}
+
+/* ============================================================================
+ * Proximity keys (keys.conf, mode 0600)
+ * ========================================================================== */
+
+#define KEYS_FILE_NAME "keys.conf"
+#define KEYS_GENERAL_GROUP "General"
+
+static gchar *get_keys_path(void)
+{
+    gchar *config_dir = get_config_dir();
+    gchar *path = g_build_filename(config_dir, KEYS_FILE_NAME, NULL);
+    g_free(config_dir);
+    return path;
+}
+
+static gchar *key_to_hex(const uint8_t *key)
+{
+    gchar *hex = g_malloc(2 * 16 + 1);
+    for (int i = 0; i < 16; i++)
+        g_snprintf(hex + 2 * i, 3, "%02x", key[i]);
+    return hex;
+}
+
+static bool hex_to_key(const gchar *hex, uint8_t *key)
+{
+    if (hex == NULL || strlen(hex) != 32)
+        return false;
+    for (int i = 0; i < 16; i++) {
+        unsigned int byte;
+        if (sscanf(hex + 2 * i, "%2x", &byte) != 1)
+            return false;
+        key[i] = (uint8_t)byte;
+    }
+    return true;
+}
+
+/* Set one key of these AirPods in keys.conf */
+static bool save_key(const char *device_address, const char *name, const uint8_t *key)
+{
+    if (device_address == NULL || device_address[0] == '\0' || !ensure_config_dir())
+        return false;
+
+    gchar *path = get_keys_path();
+    gchar *group = address_to_group(device_address);
+    gchar *hex = key_to_hex(key);
+
+    GKeyFile *keyfile = g_key_file_new();
+    if (!load_for_update(keyfile, path, G_KEY_FILE_NONE)) {
+        g_key_file_free(keyfile);
+        g_free(hex);
+        g_free(group);
+        g_free(path);
+        return false;
+    }
+    g_key_file_set_string(keyfile, group, name, hex);
+    g_key_file_set_string(keyfile, KEYS_GENERAL_GROUP, "last_device", device_address);
+
+    gsize len;
+    gchar *data = g_key_file_to_data(keyfile, &len, NULL);
+
+    /* Never readable by others, not even for a moment */
+    bool ok = false;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) {
+        ok = fchmod(fd, 0600) == 0 && write(fd, data, len) == (ssize_t)len;
+        ok = (close(fd) == 0) && ok;
+    }
+    if (!ok)
+        g_warning("Failed to save the AirPods keys: %s", g_strerror(errno));
+
+    g_free(data);
+    g_key_file_free(keyfile);
+    g_free(hex);
+    g_free(group);
+    g_free(path);
+    return ok;
+}
+
+bool config_save_proximity_irk(const char *device_address, const uint8_t *irk)
+{
+    return save_key(device_address, "irk", irk);
+}
+
+bool config_save_proximity_enc(const char *device_address, const uint8_t *enc)
+{
+    return save_key(device_address, "enc", enc);
+}
+
+bool config_load_proximity_irk(char **device_address, uint8_t *irk)
+{
+    gchar *path = get_keys_path();
+    GKeyFile *keyfile = g_key_file_new();
+    bool ok = false;
+
+    if (g_key_file_load_from_file(keyfile, path, G_KEY_FILE_NONE, NULL)) {
+        gchar *address = g_key_file_get_string(keyfile, KEYS_GENERAL_GROUP, "last_device", NULL);
+        gchar *group = address ? address_to_group(address) : NULL;
+        gchar *hex = group ? g_key_file_get_string(keyfile, group, "irk", NULL) : NULL;
+
+        ok = hex_to_key(hex, irk);
+        if (ok)
+            *device_address = g_steal_pointer(&address);
+        g_free(hex);
+        g_free(group);
+        g_free(address);
+    }
+
+    g_key_file_free(keyfile);
+    g_free(path);
+    return ok;
+}
+
+bool config_load_proximity_enc(const char *device_address, uint8_t *enc)
+{
+    if (device_address == NULL)
+        return false;
+
+    gchar *path = get_keys_path();
+    gchar *group = address_to_group(device_address);
+    GKeyFile *keyfile = g_key_file_new();
+    bool ok = false;
+
+    if (g_key_file_load_from_file(keyfile, path, G_KEY_FILE_NONE, NULL)) {
+        gchar *hex = g_key_file_get_string(keyfile, group, "enc", NULL);
+        ok = hex_to_key(hex, enc);
+        g_free(hex);
+    }
+
+    g_key_file_free(keyfile);
+    g_free(group);
+    g_free(path);
+    return ok;
+}

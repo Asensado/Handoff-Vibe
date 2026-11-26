@@ -11,12 +11,8 @@ if len(sys.argv) != 3:
     raise SystemExit('usage: python3 tests/upgrade.py OLD.deb NEW.deb')
 old, new = [Path(arg).resolve() for arg in sys.argv[1:]]
 field = lambda package, key: subprocess.check_output(['dpkg-deb', '--field', str(package), key], text=True).strip()
-assert field(old, 'Package') == 'handoff'
-assert field(new, 'Package') == 'handoff-vibe'
-assert field(new, 'Version') == '0.1.0'
-assert 'handoff' in field(new, 'Conflicts').split(', ')
-assert 'handoff' in field(new, 'Replaces').split(', ')
-# Package identities differ, so resetting the new package version is not a downgrade.
+assert field(old, 'Package') == field(new, 'Package') == 'handoff'
+subprocess.run(['dpkg', '--compare-versions', field(new, 'Version'), 'gt', field(old, 'Version')], check=True)
 root = Path(tempfile.mkdtemp(prefix='handoff-upgrade-layout-', dir='/tmp'))
 config = root / 'home/test/.config/handoff/gui.json'
 config.parent.mkdir(parents=True)
@@ -28,10 +24,7 @@ for package in (old, new):
 assert config.read_bytes() == original
 launcher = root / 'usr/share/applications/io.github.asensato.Handoff.desktop'
 assert 'Name=Handoff Vibe' in launcher.read_text()
-assert 'Exec=handoff-vibe' in launcher.read_text()
-assert (root / 'usr/bin/handoff-vibe').exists()
-assert (root / 'usr/bin/handoff').is_symlink()
 assert (root / 'usr/share/gnome-shell/extensions/handoff-vibe@asensado.github.io/extension.js').exists()
 assert 'io.github.asensato.Handoff' in (root / 'usr/share/handoff/handoff_ui/app.py').read_text()
-print('handoff → handoff-vibe 0.1.0 package-transition layout checks passed; config bytes and desktop identity preserved.')
+print('0.1.0 → 0.2.0 metadata and upgrade-layout simulation passed; config bytes and application identity preserved.')
 print('Upgrade-layout test root:', root)

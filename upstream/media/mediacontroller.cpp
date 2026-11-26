@@ -20,6 +20,9 @@ MediaController::MediaController(const QString &deviceMac, QObject *parent)
 
 void MediaController::reclaimAudioStream()
 {
+    // The service may start before the headset, and profiles can replace sinks.
+    cardName = PulseAudio::getCardForDevice(deviceMac);
+    sinkName = PulseAudio::getSinkForDevice(deviceMac);
     if (sinkName.isEmpty()) {
         std::cerr << "[" << getTimestamp().toStdString() << "] [Media] No sink name, falling back to profile cycling" << std::endl;
         cycleProfiles();
@@ -50,6 +53,7 @@ void MediaController::reclaimAudioStream()
 
 void MediaController::cycleProfiles()
 {
+    cardName = PulseAudio::getCardForDevice(deviceMac);
     if (cardName.isEmpty()) {
         std::cerr << "[" << getTimestamp().toStdString() << "] [Media] No card name, cannot cycle profiles" << std::endl;
         return;
@@ -115,6 +119,7 @@ bool MediaController::isMediaPlaying()
 
 bool MediaController::hasActiveAudio()
 {
+    sinkName = PulseAudio::getSinkForDevice(deviceMac);
     if (sinkName.isEmpty()) {
         std::cout << "[" << getTimestamp().toStdString() << "] [Media] No sink name, can't check for active audio" << std::endl;
         return false;

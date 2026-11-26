@@ -1,14 +1,24 @@
-Required Notice: Copyright (c) 2026 Asensado (https://github.com/Asensado/)
+Handoff Vibe
+Copyright (c) 2026 Asensado (https://github.com/Asensado/)
+Original Handoff Vibe contributions in 0.2.0: GPL-3.0-or-later.
+See LICENSE for the complete GNU GPL version 3 text and LICENSING.md for scope.
+No noncommercial restriction is imposed on the 0.2.0 code contributions.
 
-Handoff Vibe's original GUI, service integration, packaging, tests, Shell
-extension, and engine integration patch are offered under the PolyForm
-Noncommercial License 1.0.0 in LICENSE, to the extent Asensado can license them.
-For separate commercial permission, contact Asensado through the GitHub profile.
-No contact alone grants permission; obtain a separate written license.
+Original Qt engine: Aayushman Choudhary (xatuke) and Handoff contributors,
+https://github.com/xatuke/handoff. Original code retains MIT terms; see
+upstream/LICENSE and LICENSES/MIT-upstream.txt. The upstream README's MIT
+declaration is retained in upstream/README.md.
 
-Original Handoff engine: Copyright (c) Aayushman Choudhary (xatuke) and
-contributors, https://github.com/xatuke/handoff. Its original code remains
-under MIT; see upstream/LICENSE and LICENSES/MIT-upstream.txt.
+Earport: EarPort Contributors, https://github.com/Anoryth/earport.
+The backend, its local modifications, and the complete integrated GNOME
+companion are GPL-3.0-or-later. Source, build files, original copyright
+headers, license text and protocol-research credits are retained. See
+earport/LICENSE, earport/CREDITS, earport/UPSTREAM.txt and gnome-extension/LICENSE.
 
-Apple and Beats photos and trademarks are not licensed by this project.
-World English Bible text is public domain. See THIRD_PARTY.md and LICENSING.md.
+LibrePods protocol research: Kavish Devar and contributors, with original
+attribution retained in earport/CREDITS. Proximity-card idea: OscarHickman/earport.
+
+The 0.2.0 device illustrations are original GPL-licensed artwork by Asensado,
+replacing the earlier manufacturer photos. Apple/Beats device names remain
+their owners' trademarks. World English Bible passages are public domain.
+Earlier copies retain their existing license permissions.

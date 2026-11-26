@@ -1,0 +1,6 @@
+/build*/
+/dist/
+/earport/daemon/build*/
+__pycache__/
+*.pyc
+gschemas.compiled

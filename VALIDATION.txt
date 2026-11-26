@@ -1,20 +1,16 @@
-Handoff Vibe 0.1.0, package handoff-vibe
+Handoff Vibe 0.2.0 validation, 2026-11-26
 
-28 Python checks and 10 GNOME indicator state checks passed. Native GUI smoke
-tests passed with the updated About license description and 0.1.0 version.
+PASS: Qt control engine and Earport backend compile on Debian 13 amd64.
+PASS: 36 Python tests covering existing profile/service logic, observed Powerbeats ID, remote-audio control availability, release selection, fixed-repository assets, required digests, and SHA-256 download validation.
+PASS: 25 GNOME state and live-property decoding checks, including disconnected, handoff, switching, stale data, failed services, and paused services.
+PASS: Qt control tests: command bytes, confirmation, timeout, write failure, invalid packets, disconnect reset.
+PASS: 14 Earport suites runnable without private D-Bus sockets: protocol, settings/model recognition, battery estimator, AES, BLE proximity rules, device state, HD mic, config, AAP link, audio routing, handoff, TiPi, relink and sleep pause.
+PASS: Packaged GNOME schema compiles and resolves.
 
-Verified that the upstream engine files exactly match original commit
-4568bde6f19efe480bdc0e26058f49998bb58912. Project integration changes are
-separated into patches/0001-gui-integration.patch and applied during build.
-The patched engine builds successfully. The official unmodified PolyForm
-Noncommercial 1.0.0 text is included alongside MIT upstream notices.
+BLOCKED BY EXECUTION ENVIRONMENT: Nine Earport D-Bus integration suites could not bind private Unix sockets (Operation not permitted): dbus, media-control, ble-scanner, idle, bluez-monitor, battery-provider, apple-identity, link-trace, autoconnect. These timed out; they were not counted as passing. Run VERIFY-LOCAL.sh outside this restricted session.
 
-Built and inspected handoff-vibe_0.1.0_amd64.deb on Debian 13. Verified Package,
-Version, Conflicts and Replaces metadata, the handoff-vibe launcher, and the
-legacy handoff command alias. Old/new payload-overlay transition layout checks
-passed from package handoff 0.2.0 to handoff-vibe 0.1.0 with config bytes and
-desktop identity preserved. This is not a privileged installation/dependency
-resolution test. Desktop launcher validation passed.
+LIVE VERIFIED: User installed the 0.2.0 package successfully; dpkg reports 0.2.0 and the user service runs the supervisor and Earport backend. Powerbeats Fit establishes the control connection and reports battery levels 79%/77% and Transparency mode. The user confirmed that changing ANC/Transparency from Handoff works while iPhone audio keeps playing.
 
-Live headset switching, user-service changes, and GNOME Shell indicator loading
-remain untested. No existing user installation or service was changed.
+NOT YET VERIFIED: In-ear events, real BLE proximity cards, learned listening estimates over multiple sessions, GNOME rendering/reload and scheduled APT update installation. Host system/session buses, Bluetooth and privileged installation are inaccessible from this session. GitHub API access from the execution environment is blocked; release handling was verified using fixtures, not a live release.
+
+UI revision: tightened battery/noise spacing, icon-based native-accent noise selector, release history moved to dotted menu with tagged stable/beta/experimental cards, top-bar-only GNOME controls, direct live audio-source status, and duplicate Apple switching preference removed. PASS: The user ran native widget smoke checks outside the restricted environment: light/dark views, compact selector and hidden empty listening label, dotted-menu release window and tagged cards, statuses, logs, preferences, credits, all setup steps, unsupported-device rejection, profiles and empty state. GNOME top-bar rendering still requires a Shell reload and live confirmation.

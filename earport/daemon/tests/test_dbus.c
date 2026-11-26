@@ -1,0 +1,911 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ *
+ * D-Bus integration tests: the service on a private test bus, wired to the
+ * device, the controls and the AAP link as in main.c, over the fake
+ * Bluetooth transport. Calls methods like the extension does and checks
+ * the packets sent to the AirPods, the properties and the signals.
+ */
+
+#include <gio/gio.h>
+#include <string.h>
+
+#include "aap_link.h"
+#include "config.h"
+#include "controls.h"
+#include "dbus_service.h"
+#include "device.h"
+#include "fake_bluetooth.h"
+
+#define BUS_NAME "io.github.anoryth.EarPort"
+#define OBJECT_PATH "/io/github/anoryth/EarPort"
+#define INTERFACE "io.github.anoryth.EarPort1"
+#define ADDRESS "00:11:22:33:44:55"
+
+/* Same value as passed by meson.build */
+#define GAP_MS 2
+
+typedef struct {
+    AirPodsState state;
+    DbusService *dbus;
+    Device device;
+    Controls controls;
+    AapLink *link;
+
+    GDBusConnection *client;
+    guint signal_id;
+    GPtrArray *signals;          /* Names of the signals received */
+    bool speaking;
+} Fixture;
+
+static GTestDBus *test_bus;
+
+/* ============================================================================
+ * Wiring, as in main.c
+ * ========================================================================== */
+
+static void on_link_connected(const char *address, const char *name, void *user_data)
+{
+    Fixture *f = user_data;
+    device_session_started(&f->device, address, name);
+    controls_send_saved_settings(&f->controls, address);
+    controls_restore_ca(&f->controls);
+}
+
+static void on_link_disconnected(void *user_data)
+{
+    Fixture *f = user_data;
+    device_session_ended(&f->device);
+}
+
+static void on_link_packet(const AapParsedPacket *packet, void *user_data)
+{
+    Fixture *f = user_data;
+    device_handle_packet(&f->device, packet);
+}
+
+/* ============================================================================
+ * Helpers
+ * ========================================================================== */
+
+#define RUN_UNTIL(cond) do { \
+    gint64 deadline_ = g_get_monotonic_time() + 2 * G_USEC_PER_SEC; \
+    while (!(cond)) { \
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline_); \
+        g_main_context_iteration(NULL, FALSE); \
+        g_usleep(500); \
+    } \
+} while (0)
+
+static gboolean set_flag(gpointer user_data)
+{
+    *(bool *)user_data = true;
+    return G_SOURCE_REMOVE;
+}
+
+static void run_for(guint ms)
+{
+    bool done = false;
+    g_timeout_add(ms, set_flag, &done);
+    while (!done)
+        g_main_context_iteration(NULL, TRUE);
+}
+
+static bool name_has_owner(Fixture *f)
+{
+    GVariant *reply = g_dbus_connection_call_sync(f->client, "org.freedesktop.DBus",
+                                                  "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                                  "NameHasOwner", g_variant_new("(s)", BUS_NAME),
+                                                  G_VARIANT_TYPE("(b)"), G_DBUS_CALL_FLAGS_NONE,
+                                                  -1, NULL, NULL);
+    gboolean owned = FALSE;
+    g_variant_get(reply, "(b)", &owned);
+    g_variant_unref(reply);
+    return owned;
+}
+
+/* Calls run asynchronously while we iterate: the service answers from
+ * this same main loop */
+typedef struct {
+    bool done;
+    GVariant *reply;
+    GError *error;
+} CallResult;
+
+static void on_call_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    CallResult *result = user_data;
+    result->reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &result->error);
+    result->done = true;
+}
+
+static CallResult call_full(Fixture *f, const char *interface, const char *method,
+                            GVariant *parameters)
+{
+    CallResult result = { 0 };
+    g_dbus_connection_call(f->client, BUS_NAME, OBJECT_PATH, interface, method, parameters,
+                           NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, on_call_done, &result);
+    RUN_UNTIL(result.done);
+    return result;
+}
+
+/* Call a method the way the extension does */
+static GError *call(Fixture *f, const char *method, GVariant *parameters)
+{
+    CallResult result = call_full(f, INTERFACE, method, parameters);
+    if (result.reply != NULL)
+        g_variant_unref(result.reply);
+    return result.error;
+}
+
+static void call_ok(Fixture *f, const char *method, GVariant *parameters)
+{
+    GError *error = call(f, method, parameters);
+    g_assert_no_error(error);
+}
+
+static void call_fails(Fixture *f, const char *method, GVariant *parameters, GDBusError code)
+{
+    GError *error = call(f, method, parameters);
+    g_assert_error(error, G_DBUS_ERROR, (int)code);
+    g_error_free(error);
+}
+
+/* Current value of a property (unref it) */
+static GVariant *get_property(Fixture *f, const char *name)
+{
+    CallResult result = call_full(f, "org.freedesktop.DBus.Properties", "Get",
+                                  g_variant_new("(ss)", INTERFACE, name));
+    g_assert_no_error(result.error);
+    GVariant *value = NULL;
+    g_variant_get(result.reply, "(v)", &value);
+    g_variant_unref(result.reply);
+    return value;
+}
+
+static bool get_bool(Fixture *f, const char *name)
+{
+    GVariant *value = get_property(f, name);
+    bool b = g_variant_get_boolean(value);
+    g_variant_unref(value);
+    return b;
+}
+
+static int get_int(Fixture *f, const char *name)
+{
+    GVariant *value = get_property(f, name);
+    int i = g_variant_get_int32(value);
+    g_variant_unref(value);
+    return i;
+}
+
+static char *get_string(Fixture *f, const char *name)
+{
+    GVariant *value = get_property(f, name);
+    char *s = g_variant_dup_string(value, NULL);
+    g_variant_unref(value);
+    return s;
+}
+
+/* A key of the Settings dictionary, NULL if absent (unref it) */
+static GVariant *get_setting(Fixture *f, const char *key)
+{
+    GVariant *settings = get_property(f, "Settings");
+    GVariant *value = g_variant_lookup_value(settings, key, NULL);
+    g_variant_unref(settings);
+    return value;
+}
+
+static void on_signal(GDBusConnection *connection, const char *sender, const char *path,
+                      const char *interface, const char *signal, GVariant *parameters,
+                      gpointer user_data)
+{
+    (void)connection;
+    (void)sender;
+    (void)path;
+    (void)interface;
+    Fixture *f = user_data;
+
+    g_ptr_array_add(f->signals, g_strdup(signal));
+    if (g_strcmp0(signal, "SpeakingChanged") == 0)
+        g_variant_get(parameters, "(b)", &f->speaking);
+}
+
+static bool received(Fixture *f, const char *signal)
+{
+    for (guint i = 0; i < f->signals->len; i++) {
+        if (g_strcmp0(f->signals->pdata[i], signal) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void assert_sent(const uint8_t *packet, size_t len)
+{
+    RUN_UNTIL(fake_bt_count_sent(packet, len) > 0);
+}
+
+#define ASSERT_SENT(...) do { \
+    const uint8_t pkt_[] = { __VA_ARGS__ }; \
+    assert_sent(pkt_, sizeof(pkt_)); \
+} while (0)
+
+#define RECEIVE(...) do { \
+    const uint8_t pkt_[] = { __VA_ARGS__ }; \
+    fake_bt_receive(pkt_, sizeof(pkt_)); \
+} while (0)
+
+/* ============================================================================
+ * Fixture
+ * ========================================================================== */
+
+static void fixture_setup(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    static const AapLinkCallbacks link_callbacks = {
+        .connected = on_link_connected,
+        .disconnected = on_link_disconnected,
+        .packet = on_link_packet,
+    };
+
+    fake_bt_reset();
+    *f = (Fixture) { 0 };
+    f->signals = g_ptr_array_new_with_free_func(g_free);
+
+    airpods_state_init(&f->state);
+    f->dbus = dbus_service_new(&f->state);
+    device_init(&f->device, &f->state, f->dbus, NULL);
+    f->link = aap_link_new(&link_callbacks, f);
+    controls_init(&f->controls, &f->device, f->link, f->dbus);
+
+    f->client = g_dbus_connection_new_for_address_sync(
+        g_test_dbus_get_bus_address(test_bus),
+        G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
+        NULL, NULL, NULL);
+    g_assert_nonnull(f->client);
+    f->signal_id = g_dbus_connection_signal_subscribe(f->client, NULL, INTERFACE, NULL, OBJECT_PATH,
+                                                      NULL, G_DBUS_SIGNAL_FLAGS_NONE,
+                                                      on_signal, f, NULL);
+
+    g_assert_true(dbus_service_start(f->dbus));
+    RUN_UNTIL(name_has_owner(f));
+}
+
+static void fixture_teardown(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    controls_cleanup(&f->controls);
+    aap_link_free(f->link);
+    dbus_service_free(f->dbus);
+    RUN_UNTIL(!name_has_owner(f));
+
+    g_dbus_connection_signal_unsubscribe(f->client, f->signal_id);
+    g_object_unref(f->client);
+    airpods_state_cleanup(&f->state);
+    g_ptr_array_unref(f->signals);
+}
+
+/* ============================================================================
+ * Tests
+ * ========================================================================== */
+
+/* What AirPods Pro 2 USB-C send after the handshake (see test_device.c) */
+static void connect_airpods(Fixture *f)
+{
+    const uint8_t header[] = { 0x04, 0x00, 0x04, 0x00, 0x1D, 0x00, 0x02, 0xDD, 0x00, 0x04, 0x00 };
+    const char strings[] = "AirPods Pro\0A3048\0Apple Inc.\0SERIAL0000";
+    uint8_t metadata[sizeof(header) + sizeof(strings)];
+
+    aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+
+    memcpy(metadata, header, sizeof(header));
+    memcpy(metadata + sizeof(header), strings, sizeof(strings));
+    fake_bt_receive(metadata, sizeof(metadata));
+
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x02, 0x00, 0x00, 0x00);  /* ANC */
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x17, 0x00, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x25, 0x01, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x23, 0x00, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x01, 0x00, 0x00, 0x00);  /* CA on */
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x26, 0x01, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1B, 0x02, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x35, 0x01, 0x00, 0x00, 0x00);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x2E, 0x32, 0x00, 0x00, 0x00);  /* Level 50 */
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x03,
+            0x04, 0x01, 0x53, 0x02, 0x01,
+            0x02, 0x01, 0x53, 0x02, 0x01,
+            0x08, 0x01, 0x00, 0x04, 0x01);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x00);  /* Both in */
+}
+
+static void test_disconnected(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    g_assert_false(get_bool(f, "Connected"));
+    g_assert_cmpint(get_int(f, "BatteryLeft"), ==, -1);
+
+    /* Not seen nearby: nothing to show */
+    g_autoptr(GVariant) nearby = get_property(f, "NearbyBattery");
+    g_assert_cmpuint(g_variant_n_children(nearby), ==, 0);
+
+    /* The extension compares it with its own version */
+    g_autofree char *version = get_string(f, "Version");
+    g_assert_cmpstr(version, ==, EARPORT_VERSION);
+
+    /* Nothing announced: no setting can be changed */
+    call_fails(f, "SetSetting", g_variant_new("(sv)", "OneBudANC", g_variant_new_boolean(TRUE)),
+               G_DBUS_ERROR_NOT_SUPPORTED);
+}
+
+static void test_connection(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    RUN_UNTIL(received(f, "DeviceConnected"));
+    RUN_UNTIL(received(f, "BatteryChanged"));
+    RUN_UNTIL(received(f, "EarDetectionChanged"));
+
+    g_assert_true(get_bool(f, "Connected"));
+    g_autofree char *model = get_string(f, "DeviceModel");
+    g_assert_cmpstr(model, ==, "AirPods Pro 2 (USB-C)");
+    g_autofree char *mode = get_string(f, "NoiseControlMode");
+    g_assert_cmpstr(mode, ==, "anc");
+    g_assert_cmpint(get_int(f, "BatteryLeft"), ==, 83);
+    g_assert_true(get_bool(f, "ConversationalAwareness"));
+
+    /* Settings the AirPods announced, booleans as b, choices as i */
+    g_autoptr(GVariant) one_bud = get_setting(f, "OneBudANC");
+    g_assert_nonnull(one_bud);
+    g_assert_false(g_variant_get_boolean(one_bud));
+    g_autoptr(GVariant) press_speed = get_setting(f, "PressSpeed");
+    g_assert_cmpint(g_variant_get_int32(press_speed), ==, 0);
+}
+
+/* Controls remain available on the control link while another host owns
+ * audio. Changing ANC must not send an ownership claim or steal playback. */
+static void test_powerbeats_controls_elsewhere(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    connect_airpods(f);
+    AapParsedPacket metadata = { .type = AAP_PKT_TYPE_METADATA };
+    g_strlcpy(metadata.data.metadata.model_number, "A3476",
+              sizeof(metadata.data.metadata.model_number));
+    device_handle_packet(&f->device, &metadata);
+    AapParsedPacket source = { .type = AAP_PKT_TYPE_AUDIO_SOURCE };
+    source.data.audio_source.type = AAP_AUDIO_SOURCE_MEDIA;
+    g_strlcpy(source.data.audio_source.address, "AA:BB:CC:DD:EE:FF",
+              sizeof(source.data.audio_source.address));
+    device_handle_packet(&f->device, &source);
+
+    g_autofree char *model = get_string(f, "DeviceModel");
+    g_assert_cmpstr(model, ==, "Powerbeats Fit");
+    g_assert_true(get_bool(f, "SupportsANC"));
+    g_assert_false(get_bool(f, "SupportsAdaptive"));
+    const uint8_t claim[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x06, 0x01 };
+    guint claims = fake_bt_count_sent(claim, sizeof(claim));
+    const char *modes[] = {"off", "anc", "transparency"};
+    for (gsize i = 0; i < G_N_ELEMENTS(modes); i++) {
+        call_ok(f, "SetNoiseControlMode", g_variant_new("(s)", modes[i]));
+        const uint8_t command[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00,
+                                    0x0D, (uint8_t)(i + 1), 0x00, 0x00, 0x00 };
+        assert_sent(command, sizeof(command));
+    }
+    g_assert_cmpuint(fake_bt_count_sent(claim, sizeof(claim)), ==, claims);
+    g_assert_true(get_bool(f, "Connected"));
+    g_autofree char *audio_source = get_string(f, "AudioSource");
+    g_assert_cmpstr(audio_source, ==, "other");
+}
+
+static void test_noise_control(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    call_ok(f, "SetNoiseControlMode", g_variant_new("(s)", "transparency"));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x03, 0x00, 0x00, 0x00);
+
+    /* The AirPods confirm the change */
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x03, 0x00, 0x00, 0x00);
+    RUN_UNTIL(received(f, "NoiseControlModeChanged"));
+    g_autofree char *mode = get_string(f, "NoiseControlMode");
+    g_assert_cmpstr(mode, ==, "transparency");
+}
+
+/* AirPods that missed SET_FEATURES switch to Adaptive but report another
+ * mode (real AirPods Pro 2: 0x01): send the features and the request again,
+ * once */
+static void test_adaptive_resent_when_refused(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t adaptive[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x04 };
+
+    connect_airpods(f);
+    run_for(10 * GAP_MS);
+    guint features = fake_bt_count_sent(AAP_PKT_SET_FEATURES, AAP_SET_FEATURES_SIZE);
+
+    call_ok(f, "SetNoiseControlMode", g_variant_new("(s)", "adaptive"));
+    assert_sent(adaptive, sizeof(adaptive));
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x01, 0x00, 0x00, 0x00);
+    RUN_UNTIL(fake_bt_count_sent(adaptive, sizeof(adaptive)) == 2);
+    g_assert_cmpuint(fake_bt_count_sent(AAP_PKT_SET_FEATURES, AAP_SET_FEATURES_SIZE), ==, features + 1);
+
+    /* Once only */
+    run_for(4000);
+    g_assert_cmpuint(fake_bt_count_sent(adaptive, sizeof(adaptive)), ==, 2);
+}
+
+static void test_adaptive_not_resent_when_reported(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t adaptive[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x04 };
+
+    connect_airpods(f);
+    run_for(10 * GAP_MS);
+    guint features = fake_bt_count_sent(AAP_PKT_SET_FEATURES, AAP_SET_FEATURES_SIZE);
+
+    call_ok(f, "SetNoiseControlMode", g_variant_new("(s)", "adaptive"));
+    assert_sent(adaptive, sizeof(adaptive));
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x04, 0x00, 0x00, 0x00);
+    run_for(4000);
+    g_assert_cmpuint(fake_bt_count_sent(adaptive, sizeof(adaptive)), ==, 1);
+    g_assert_cmpuint(fake_bt_count_sent(AAP_PKT_SET_FEATURES, AAP_SET_FEATURES_SIZE), ==, features);
+}
+
+/* A typo must not turn noise control off */
+static void test_noise_control_unknown(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t off[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x0D, 0x01 };
+
+    connect_airpods(f);
+    call_fails(f, "SetNoiseControlMode", g_variant_new("(s)", "anx"), G_DBUS_ERROR_INVALID_ARGS);
+    run_for(10 * GAP_MS);
+    g_assert_cmpuint(fake_bt_count_sent(off, sizeof(off)), ==, 0);
+}
+
+static void test_set_setting(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+
+    call_ok(f, "SetSetting", g_variant_new("(sv)", "OneBudANC", g_variant_new_boolean(TRUE)));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1B, 0x01, 0x00, 0x00, 0x00);
+    /* The AirPods don't echo settings: the state is updated right away */
+    g_autoptr(GVariant) one_bud = get_setting(f, "OneBudANC");
+    g_assert_true(g_variant_get_boolean(one_bud));
+
+    call_ok(f, "SetSetting", g_variant_new("(sv)", "PressSpeed", g_variant_new_int32(2)));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x17, 0x02, 0x00, 0x00, 0x00);
+}
+
+static void test_set_setting_errors(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    call_fails(f, "SetSetting", g_variant_new("(sv)", "Nope", g_variant_new_boolean(TRUE)),
+               G_DBUS_ERROR_INVALID_ARGS);
+    call_fails(f, "SetSetting", g_variant_new("(sv)", "OneBudANC", g_variant_new_int32(1)),
+               G_DBUS_ERROR_INVALID_ARGS);
+    call_fails(f, "SetSetting", g_variant_new("(sv)", "PressSpeed", g_variant_new_int32(5)),
+               G_DBUS_ERROR_INVALID_ARGS);
+
+    /* Link down: the command can't be sent */
+    fake_bt.refuse_connects = 100;
+    fake_bt_peer_closes();
+    call_fails(f, "SetSetting", g_variant_new("(sv)", "OneBudANC", g_variant_new_boolean(TRUE)),
+               G_DBUS_ERROR_NOT_SUPPORTED);
+}
+
+static void test_conversation_awareness(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    DeviceProfile profile;
+
+    connect_airpods(f);
+    call_ok(f, "SetConversationalAwareness", g_variant_new("(b)", FALSE));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x02, 0x00, 0x00, 0x00);
+    g_assert_false(get_bool(f, "ConversationalAwareness"));
+
+    /* Sent back on the next connection */
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_false(profile.conversational_awareness);
+}
+
+static void test_adaptive_level(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    call_ok(f, "SetAdaptiveNoiseLevel", g_variant_new("(i)", 30));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x2E, 0x1E, 0x00, 0x00, 0x00);
+    g_assert_cmpint(get_int(f, "AdaptiveNoiseLevel"), ==, 30);
+
+    call_fails(f, "SetAdaptiveNoiseLevel", g_variant_new("(i)", 101), G_DBUS_ERROR_INVALID_ARGS);
+    call_fails(f, "SetAdaptiveNoiseLevel", g_variant_new("(i)", -1), G_DBUS_ERROR_INVALID_ARGS);
+}
+
+/* Commands that can't reach the AirPods fail instead of pretending */
+static void test_commands_need_airpods(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    call_fails(f, "SetNoiseControlMode", g_variant_new("(s)", "anc"), G_DBUS_ERROR_FAILED);
+    call_fails(f, "SetConversationalAwareness", g_variant_new("(b)", TRUE), G_DBUS_ERROR_FAILED);
+    call_fails(f, "SetAdaptiveNoiseLevel", g_variant_new("(i)", 50), G_DBUS_ERROR_FAILED);
+    call_fails(f, "SetListeningModes", g_variant_new("(bbbb)", FALSE, TRUE, TRUE, FALSE),
+               G_DBUS_ERROR_FAILED);
+
+    /* Local only: works without AirPods */
+    call_ok(f, "SetDisplayName", g_variant_new("(s)", "Mes AirPods"));
+}
+
+static void test_listening_modes(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t anc_only[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1A, 0x02 };
+
+    connect_airpods(f);
+    call_ok(f, "SetListeningModes", g_variant_new("(bbbb)", FALSE, TRUE, TRUE, FALSE));
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1A, 0x06, 0x00, 0x00, 0x00);
+    g_assert_false(get_bool(f, "ListeningModeOff"));
+    g_assert_true(get_bool(f, "ListeningModeANC"));
+
+    /* The long press needs at least two modes to cycle through */
+    call_fails(f, "SetListeningModes", g_variant_new("(bbbb)", FALSE, FALSE, TRUE, FALSE),
+               G_DBUS_ERROR_INVALID_ARGS);
+    run_for(10 * GAP_MS);
+    g_assert_cmpuint(fake_bt_count_sent(anc_only, sizeof(anc_only)), ==, 0);
+    g_assert_true(get_bool(f, "ListeningModeTransparency"));
+}
+
+static void test_display_name(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    call_ok(f, "SetDisplayName", g_variant_new("(s)", "Mes AirPods"));
+    g_autofree char *custom = get_string(f, "DisplayName");
+    g_assert_cmpstr(custom, ==, "Mes AirPods");
+
+    /* Empty: back to the model name */
+    call_ok(f, "SetDisplayName", g_variant_new("(s)", ""));
+    g_autofree char *model = get_string(f, "DisplayName");
+    g_assert_cmpstr(model, ==, "AirPods Pro 2 (USB-C)");
+
+    /* Too long: cut between two characters, the same now and once saved */
+    g_autoptr(GString) long_name = g_string_new(NULL);
+    for (int i = 0; i < 40; i++)
+        g_string_append(long_name, "é");
+    call_ok(f, "SetDisplayName", g_variant_new("(s)", long_name->str));
+    g_autofree char *cut = get_string(f, "DisplayName");
+    g_assert_true(g_utf8_validate(cut, -1, NULL));
+    g_assert_cmpuint(g_utf8_strlen(cut, -1), ==, 31);
+    DeviceProfile profile;
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_cmpstr(profile.display_name, ==, cut);
+}
+
+static void save_profile(bool listening_modes_set)
+{
+    DeviceProfile profile;
+
+    config_get_default_profile(&profile);
+    profile.listening_modes = (ListeningModesConfig) {
+        .off_enabled = true, .transparency_enabled = true,
+        .anc_enabled = true, .adaptive_enabled = false,
+    };
+    profile.listening_modes_set = listening_modes_set;
+    profile.conversational_awareness = false;
+    profile.adaptive_noise_level = 40;
+    g_assert_true(config_save_device_profile(ADDRESS, &profile));
+}
+
+/* The long-press modes set in EarPort are sent back: the AirPods don't
+ * announce them. Conversation awareness and the adaptive level are not:
+ * the AirPods keep what was set on another device and announce it. */
+static void test_saved_profile(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t ca_off[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28 };
+    const uint8_t level[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x2E };
+
+    save_profile(true);
+    connect_airpods(f);
+    ASSERT_SENT(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1A, 0x07, 0x00, 0x00, 0x00);
+    g_assert_true(get_bool(f, "ListeningModeOff"));
+
+    run_for(100);
+    g_assert_cmpuint(fake_bt_count_sent(ca_off, sizeof(ca_off)), ==, 0);
+    g_assert_cmpuint(fake_bt_count_sent(level, sizeof(level)), ==, 0);
+    g_assert_true(get_bool(f, "ConversationalAwareness"));
+    g_assert_cmpint(get_int(f, "AdaptiveNoiseLevel"), ==, 50);
+}
+
+/* Profile saved for another setting: the defaults are not pushed */
+static void test_defaults_not_pushed(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t modes[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x1A };
+
+    save_profile(false);
+    connect_airpods(f);
+    run_for(700);
+    g_assert_cmpuint(fake_bt_count_sent(modes, sizeof(modes)), ==, 0);
+}
+
+/* Setting the modes here marks them for the next connections */
+static void test_listening_modes_remembered(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    DeviceProfile profile;
+
+    connect_airpods(f);
+    call_ok(f, "SetListeningModes", g_variant_new("(bbbb)", TRUE, FALSE, TRUE, FALSE));
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_true(profile.listening_modes_set);
+    g_assert_true(profile.listening_modes.off_enabled);
+}
+
+static void test_conversation_signals(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x4B, 0x00, 0x02, 0x00, 0x01, 0x01);
+    RUN_UNTIL(f->speaking);
+
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x4B, 0x00, 0x02, 0x00, 0x01, 0x08);
+    RUN_UNTIL(!f->speaking);
+}
+
+static void on_hd_mic(bool enabled, void *user_data)
+{
+    *(int *)user_data = enabled ? 1 : 0;
+}
+
+/* The HD microphone option: refused when the daemon can't provide it,
+ * given to the daemon otherwise */
+static void test_hd_mic_option(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    int asked = -1;
+    const DbusServiceCallbacks callbacks = { .hd_mic = on_hd_mic };
+    dbus_service_set_service_callbacks(f->dbus, &callbacks, &asked);
+
+    g_assert_false(get_bool(f, "HdMicAvailable"));
+    call_fails(f, "SetHdMic", g_variant_new("(b)", TRUE), G_DBUS_ERROR_NOT_SUPPORTED);
+    g_assert_cmpint(asked, ==, -1);
+
+    dbus_service_set_hd_mic(f->dbus, true, false);
+    g_assert_true(get_bool(f, "HdMicAvailable"));
+    g_assert_false(get_bool(f, "HdMic"));
+    call_ok(f, "SetHdMic", g_variant_new("(b)", TRUE));
+    g_assert_cmpint(asked, ==, 1);
+}
+
+static void on_recording(bool recording, void *user_data)
+{
+    *(int *)user_data = recording;
+}
+
+/* An application records, as GNOME Shell tells; back to not recording when
+ * that client leaves without saying so (the Shell restarted) */
+static void test_recording_client_gone(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    int recording = -1;
+    const DbusServiceCallbacks callbacks = { .recording = on_recording };
+    dbus_service_set_service_callbacks(f->dbus, &callbacks, &recording);
+
+    call_ok(f, "SetRecording", g_variant_new("(b)", TRUE));
+    g_assert_cmpint(recording, ==, 1);
+    call_ok(f, "SetRecording", g_variant_new("(b)", FALSE));
+    g_assert_cmpint(recording, ==, 0);
+
+    GDBusConnection *shell = g_dbus_connection_new_for_address_sync(
+        g_test_dbus_get_bus_address(test_bus),
+        G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
+        NULL, NULL, NULL);
+    CallResult result = { 0 };
+    g_dbus_connection_call(shell, BUS_NAME, OBJECT_PATH, INTERFACE, "SetRecording",
+                           g_variant_new("(b)", TRUE), NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+                           on_call_done, &result);
+    RUN_UNTIL(result.done);
+    g_assert_no_error(result.error);
+    g_variant_unref(result.reply);
+    g_assert_cmpint(recording, ==, 1);
+
+    g_dbus_connection_close_sync(shell, NULL, NULL);
+    g_object_unref(shell);
+    RUN_UNTIL(recording == 0);
+}
+
+/* Lost while speaking: clients get the volume back */
+static void test_disconnection(Fixture *f, gconstpointer data)
+{
+    (void)data;
+
+    connect_airpods(f);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x4B, 0x00, 0x02, 0x00, 0x01, 0x01);
+    RUN_UNTIL(f->speaking);
+
+    aap_link_device_disconnected(f->link);
+    RUN_UNTIL(received(f, "DeviceDisconnected"));
+    RUN_UNTIL(!f->speaking);
+    g_assert_false(get_bool(f, "Connected"));
+    g_assert_null(get_setting(f, "OneBudANC"));
+}
+
+static void on_properties_changed(GDBusConnection *connection, const char *sender,
+                                  const char *path, const char *interface, const char *signal,
+                                  GVariant *parameters, gpointer user_data)
+{
+    (void)connection;
+    (void)sender;
+    (void)path;
+    (void)interface;
+    (void)signal;
+    Fixture *f = user_data;
+    g_autoptr(GVariant) changed = g_variant_get_child_value(parameters, 1);
+    GVariantIter iter;
+    const char *name;
+
+    g_variant_iter_init(&iter, changed);
+    while (g_variant_iter_next(&iter, "{&sv}", &name, NULL))
+        g_ptr_array_add(f->signals, g_strdup_printf("changed:%s", name));
+}
+
+/* A disconnect announces every value it resets, so clients other than the
+ * extension do not keep the old battery or mode as live */
+static void test_disconnect_announces_reset(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    guint id = g_dbus_connection_signal_subscribe(f->client, NULL,
+                                                  "org.freedesktop.DBus.Properties",
+                                                  "PropertiesChanged", OBJECT_PATH, NULL,
+                                                  G_DBUS_SIGNAL_FLAGS_NONE,
+                                                  on_properties_changed, f, NULL);
+
+    connect_airpods(f);
+    RUN_UNTIL(get_int(f, "BatteryLeft") == 83);
+
+    g_ptr_array_set_size(f->signals, 0);
+    aap_link_device_disconnected(f->link);
+    RUN_UNTIL(received(f, "DeviceDisconnected"));
+    static const char *const reset[] = {
+        "BatteryLeft", "BatteryRight", "BatteryCase", "ChargingLeft", "ChargingRight",
+        "ChargingCase", "LeftInEar", "RightInEar", "ListeningTimeRemaining",
+        "NoiseControlMode", "ConversationalAwareness", "AdaptiveNoiseLevel",
+        "ListeningModeOff", "ListeningModeTransparency", "ListeningModeANC",
+        "ListeningModeAdaptive", "DeviceModel", "IsHeadphones", "SupportsANC",
+        "SupportsAdaptive", "DisplayName",
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(reset); i++) {
+        g_autofree char *name = g_strdup_printf("changed:%s", reset[i]);
+        RUN_UNTIL(received(f, name));
+    }
+    g_assert_cmpint(get_int(f, "BatteryLeft"), ==, -1);
+
+    g_dbus_connection_signal_unsubscribe(f->client, id);
+}
+
+/* Conversation Awareness off while the HD microphone records, back on after */
+static void test_mic_turns_ca_off(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t ca_off[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x02, 0x00, 0x00, 0x00 };
+    const uint8_t ca_on[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x01, 0x00, 0x00, 0x00 };
+    DeviceProfile profile;
+
+    connect_airpods(f);
+    RUN_UNTIL(get_bool(f, "ConversationalAwareness"));
+    config_load_device_profile(ADDRESS, &profile);
+    bool chosen = profile.conversational_awareness;
+    controls_mic_capture_changed(&f->controls, true);
+    assert_sent(ca_off, sizeof(ca_off));
+    g_assert_false(get_bool(f, "ConversationalAwareness"));
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_true(profile.ca_off_for_mic);
+    /* The user's own choice is untouched */
+    g_assert_cmpint(profile.conversational_awareness, ==, chosen);
+
+    controls_mic_capture_changed(&f->controls, false);
+    assert_sent(ca_on, sizeof(ca_on));
+    g_assert_true(get_bool(f, "ConversationalAwareness"));
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_false(profile.ca_off_for_mic);
+
+    /* Stopped again: nothing left to restore */
+    controls_mic_capture_changed(&f->controls, false);
+    run_for(50);
+    g_assert_cmpuint(fake_bt_count_sent(ca_on, sizeof(ca_on)), ==, 1);
+}
+
+/* Off already: recording leaves it off, stopping doesn't turn it on */
+static void test_mic_keeps_ca_off(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t ca[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28 };
+
+    connect_airpods(f);
+    RECEIVE(0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x02, 0x00, 0x00, 0x00);
+    RUN_UNTIL(!get_bool(f, "ConversationalAwareness"));
+
+    controls_mic_capture_changed(&f->controls, true);
+    controls_mic_capture_changed(&f->controls, false);
+    run_for(50);
+    g_assert_cmpuint(fake_bt_count_sent(ca, sizeof(ca)), ==, 0);
+    g_assert_false(get_bool(f, "ConversationalAwareness"));
+}
+
+/* Disconnected while recording: turned back on at the next connection */
+static void test_mic_ca_restored_on_connection(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    const uint8_t ca_on[] = { 0x04, 0x00, 0x04, 0x00, 0x09, 0x00, 0x28, 0x01, 0x00, 0x00, 0x00 };
+    DeviceProfile profile;
+
+    connect_airpods(f);
+    RUN_UNTIL(get_bool(f, "ConversationalAwareness"));
+    controls_mic_capture_changed(&f->controls, true);
+    aap_link_device_disconnected(f->link);
+    RUN_UNTIL(received(f, "DeviceDisconnected"));
+    g_assert_cmpuint(fake_bt_count_sent(ca_on, sizeof(ca_on)), ==, 0);
+
+    connect_airpods(f);
+    assert_sent(ca_on, sizeof(ca_on));
+    g_assert_true(config_load_device_profile(ADDRESS, &profile));
+    g_assert_false(profile.ca_off_for_mic);
+}
+
+int main(int argc, char *argv[])
+{
+    g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
+    /* Warnings are expected (commands while disconnected) */
+    g_log_set_always_fatal(G_LOG_FATAL_MASK | G_LOG_LEVEL_CRITICAL);
+
+    test_bus = g_test_dbus_new(G_TEST_DBUS_NONE);
+    g_test_dbus_up(test_bus);
+
+#define ADD(path, func) \
+    g_test_add(path, Fixture, NULL, fixture_setup, func, fixture_teardown)
+
+    ADD("/dbus/disconnected", test_disconnected);
+    ADD("/dbus/connection", test_connection);
+    ADD("/dbus/noise-control", test_noise_control);
+    ADD("/dbus/powerbeats-controls-elsewhere", test_powerbeats_controls_elsewhere);
+    ADD("/dbus/noise-control-unknown", test_noise_control_unknown);
+    ADD("/dbus/commands-need-airpods", test_commands_need_airpods);
+    ADD("/dbus/set-setting", test_set_setting);
+    ADD("/dbus/set-setting-errors", test_set_setting_errors);
+    ADD("/dbus/conversation-awareness", test_conversation_awareness);
+    ADD("/dbus/adaptive-level", test_adaptive_level);
+    ADD("/dbus/listening-modes", test_listening_modes);
+    ADD("/dbus/display-name", test_display_name);
+    ADD("/dbus/saved-profile", test_saved_profile);
+    ADD("/dbus/defaults-not-pushed", test_defaults_not_pushed);
+    ADD("/dbus/listening-modes-remembered", test_listening_modes_remembered);
+    ADD("/dbus/conversation-signals", test_conversation_signals);
+    ADD("/dbus/disconnection", test_disconnection);
+    ADD("/dbus/adaptive-resent-when-refused", test_adaptive_resent_when_refused);
+    ADD("/dbus/adaptive-not-resent-when-reported", test_adaptive_not_resent_when_reported);
+    ADD("/dbus/hd-mic-option", test_hd_mic_option);
+    ADD("/dbus/recording-client-gone", test_recording_client_gone);
+    ADD("/dbus/disconnect-announces-reset", test_disconnect_announces_reset);
+    ADD("/dbus/mic-turns-ca-off", test_mic_turns_ca_off);
+    ADD("/dbus/mic-keeps-ca-off", test_mic_keeps_ca_off);
+    ADD("/dbus/mic-ca-restored-on-connection", test_mic_ca_restored_on_connection);
+
+    int result = g_test_run();
+
+    g_test_dbus_down(test_bus);
+    g_object_unref(test_bus);
+    return result;
+}

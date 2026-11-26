@@ -34,8 +34,8 @@ namespace Packets {
 
         struct Info {
             QByteArray deviceMac;
-            Type type;
-            bool isValid;
+            Type type = NONE;
+            bool isValid = false;
         };
 
         inline Info parse(const QByteArray &data) {

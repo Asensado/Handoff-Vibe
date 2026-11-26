@@ -1,0 +1,458 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ */
+
+#include "airpods_state.h"
+#include <string.h>
+
+void airpods_state_init(AirPodsState *state)
+{
+    memset(state, 0, sizeof(AirPodsState));
+
+    state->connected = false;
+    state->device_name = NULL;
+    state->device_address = NULL;
+    state->display_name = NULL;
+    state->model = AIRPODS_MODEL_UNKNOWN;
+
+    state->battery.left.level = -1;
+    state->battery.left.available = false;
+    state->battery.right.level = -1;
+    state->battery.right.available = false;
+    state->battery.case_battery.level = -1;
+    state->case_advert_level = -1;
+    state->battery.case_battery.available = false;
+    state->listening_minutes_left = -1;
+
+    state->noise_control_mode = NOISE_CONTROL_OFF;
+    state->conversational_awareness = false;
+    state->adaptive_noise_level = AIRPODS_DEFAULT_ADAPTIVE_LEVEL;
+    state->listening_modes = AIRPODS_DEFAULT_LISTENING_MODES;
+
+    state->ear_detection.left_in_ear = false;
+    state->ear_detection.right_in_ear = false;
+    state->ear_detection.primary_left = true;
+}
+
+void airpods_state_cleanup(AirPodsState *state)
+{
+    g_free(state->device_name);
+    g_free(state->device_address);
+    g_free(state->display_name);
+    g_clear_pointer(&state->nearby_name, g_free);
+    state->device_name = NULL;
+    state->device_address = NULL;
+    state->display_name = NULL;
+}
+
+void airpods_state_reset(AirPodsState *state)
+{
+    state->connected = false;
+    g_free(state->device_name);
+    g_free(state->device_address);
+    g_free(state->display_name);
+    state->device_name = NULL;
+    state->device_address = NULL;
+    state->display_name = NULL;
+    state->model = AIRPODS_MODEL_UNKNOWN;
+    state->audio_source = NULL;
+
+    state->battery.left.level = -1;
+    state->battery.left.status = BATTERY_STATUS_UNKNOWN;
+    state->battery.left.available = false;
+    state->battery.right.level = -1;
+    state->battery.right.status = BATTERY_STATUS_UNKNOWN;
+    state->battery.right.available = false;
+    state->battery.case_battery.level = -1;
+    state->battery.case_battery.status = BATTERY_STATUS_UNKNOWN;
+    state->battery.case_battery.available = false;
+    state->listening_minutes_left = -1;
+
+    state->noise_control_mode = NOISE_CONTROL_OFF;
+    state->conversational_awareness = false;
+    state->adaptive_noise_level = AIRPODS_DEFAULT_ADAPTIVE_LEVEL;
+    /* Not announced: the next AirPods must not inherit these */
+    state->listening_modes = AIRPODS_DEFAULT_LISTENING_MODES;
+
+    state->ear_detection.left_in_ear = false;
+    state->ear_detection.right_in_ear = false;
+
+    memset(state->setting_values, 0, sizeof(state->setting_values));
+    memset(state->setting_announced, 0, sizeof(state->setting_announced));
+}
+
+void airpods_state_set_device(AirPodsState *state,
+                               const char *name,
+                               const char *address,
+                               AirPodsModel model)
+{
+    g_free(state->device_name);
+    g_free(state->device_address);
+    state->device_name = g_strdup(name);
+    state->device_address = g_strdup(address);
+    state->model = model;
+    state->connected = true;
+}
+
+void airpods_state_set_display_name(AirPodsState *state, const char *display_name)
+{
+    g_free(state->display_name);
+    /* Empty string means no custom name (use model) */
+    if (display_name && display_name[0] != '\0') {
+        state->display_name = g_strdup(display_name);
+    } else {
+        state->display_name = NULL;
+    }
+}
+
+const char *airpods_state_get_display_name(AirPodsState *state)
+{
+    if (state->display_name && state->display_name[0] != '\0') {
+        return state->display_name;
+    }
+    /* Fall back to BlueZ device name while the model is not yet detected
+     * (metadata packet arrives shortly after connection). */
+    if (state->model == AIRPODS_MODEL_UNKNOWN &&
+        state->device_name && state->device_name[0] != '\0') {
+        return state->device_name;
+    }
+    return airpods_model_to_string(state->model);
+}
+
+void airpods_state_set_battery(AirPodsState *state,
+                                int8_t left, BatteryStatus left_status,
+                                int8_t right, BatteryStatus right_status,
+                                int8_t case_level, BatteryStatus case_status)
+{
+    state->battery.left.level = left;
+    state->battery.left.status = left_status;
+    state->battery.left.available = (left >= 0);
+
+    state->battery.right.level = right;
+    state->battery.right.status = right_status;
+    state->battery.right.available = (right >= 0);
+
+    state->battery.case_battery.level = case_level;
+    state->battery.case_battery.status = case_status;
+    state->battery.case_battery.available = (case_level >= 0);
+}
+
+int airpods_state_case_level(const AirPodsState *state, bool *charging)
+{
+    if (state->battery.case_battery.level >= 0) {
+        *charging = state->battery.case_battery.status == BATTERY_STATUS_CHARGING;
+        return state->battery.case_battery.level;
+    }
+    *charging = state->case_advert_level >= 0 && state->case_advert_charging;
+    return state->case_advert_level;
+}
+
+int airpods_state_nearby_case_level(const AirPodsState *state, bool *charging)
+{
+    if (state->nearby_case >= 0) {
+        *charging = state->nearby_case_charging;
+        return state->nearby_case;
+    }
+    *charging = state->case_advert_level >= 0 && state->case_advert_charging;
+    return state->case_advert_level;
+}
+
+bool airpods_state_set_listening_minutes(AirPodsState *state, int minutes)
+{
+    bool changed = state->listening_minutes_left != minutes;
+    state->listening_minutes_left = minutes;
+    return changed;
+}
+
+void airpods_state_set_noise_control(AirPodsState *state, NoiseControlMode mode)
+{
+    state->noise_control_mode = mode;
+}
+
+static void update_left_right(EarDetectionState *ears)
+{
+    ears->left_in_ear = ears->primary_left ? ears->primary_in_ear : ears->secondary_in_ear;
+    ears->right_in_ear = ears->primary_left ? ears->secondary_in_ear : ears->primary_in_ear;
+}
+
+void airpods_state_set_ear_detection(AirPodsState *state,
+                                      bool primary_in_ear,
+                                      bool secondary_in_ear)
+{
+    state->ear_detection.primary_in_ear = primary_in_ear;
+    state->ear_detection.secondary_in_ear = secondary_in_ear;
+    update_left_right(&state->ear_detection);
+}
+
+bool airpods_state_set_primary_left(AirPodsState *state, bool primary_left)
+{
+    if (state->ear_detection.primary_left == primary_left)
+        return false;
+
+    bool left = state->ear_detection.left_in_ear;
+    bool right = state->ear_detection.right_in_ear;
+    g_message("Primary pod: %s", primary_left ? "left" : "right");
+    state->ear_detection.primary_left = primary_left;
+    update_left_right(&state->ear_detection);
+    return left != state->ear_detection.left_in_ear || right != state->ear_detection.right_in_ear;
+}
+
+void airpods_state_set_conversational_awareness(AirPodsState *state, bool enabled)
+{
+    state->conversational_awareness = enabled;
+}
+
+void airpods_state_set_adaptive_noise_level(AirPodsState *state, int level)
+{
+    state->adaptive_noise_level = CLAMP(level, 0, 100);
+}
+
+bool airpods_state_set_setting(AirPodsState *state, uint8_t id, uint8_t value)
+{
+    int index = airpods_setting_index(airpods_setting_by_id(id));
+    if (index < 0)
+        return false;
+
+    bool changed = !state->setting_announced[index] ||
+                   state->setting_values[index] != value;
+    state->setting_values[index] = value;
+    state->setting_announced[index] = true;
+
+    return changed;
+}
+
+bool airpods_state_get_setting(AirPodsState *state, uint8_t id, uint8_t *value)
+{
+    int index = airpods_setting_index(airpods_setting_by_id(id));
+    if (index < 0)
+        return false;
+
+    bool announced = state->setting_announced[index];
+    if (announced)
+        *value = state->setting_values[index];
+
+    return announced;
+}
+
+void airpods_state_set_listening_modes(AirPodsState *state,
+                                        bool off_enabled,
+                                        bool transparency_enabled,
+                                        bool anc_enabled,
+                                        bool adaptive_enabled)
+{
+    state->listening_modes.off_enabled = off_enabled;
+    state->listening_modes.transparency_enabled = transparency_enabled;
+    state->listening_modes.anc_enabled = anc_enabled;
+    state->listening_modes.adaptive_enabled = adaptive_enabled;
+}
+
+const char *airpods_model_to_string(AirPodsModel model)
+{
+    switch (model) {
+    case BEATS_MODEL_POWERBEATS_FIT:
+        return "Powerbeats Fit";
+    case AIRPODS_MODEL_1:
+        return "AirPods 1st Gen";
+    case AIRPODS_MODEL_2:
+        return "AirPods 2nd Gen";
+    case AIRPODS_MODEL_3:
+        return "AirPods 3rd Gen";
+    case AIRPODS_MODEL_4:
+        return "AirPods 4th Gen";
+    case AIRPODS_MODEL_4_ANC:
+        return "AirPods 4th Gen (ANC)";
+    case AIRPODS_MODEL_5:
+        return "AirPods 5";
+    case AIRPODS_MODEL_5_WIRELESS_CHARGING:
+        return "AirPods 5 (Wireless Charging)";
+    case AIRPODS_MODEL_PRO:
+        return "AirPods Pro";
+    case AIRPODS_MODEL_PRO_2:
+        return "AirPods Pro 2";
+    case AIRPODS_MODEL_PRO_2_USBC:
+        return "AirPods Pro 2 (USB-C)";
+    case AIRPODS_MODEL_PRO_3:
+        return "AirPods Pro 3";
+    case AIRPODS_MODEL_MAX:
+        return "AirPods Max";
+    case AIRPODS_MODEL_MAX_USBC:
+        return "AirPods Max (USB-C)";
+    case AIRPODS_MODEL_MAX_2:
+        return "AirPods Max 2";
+    default:
+        return "Unknown AirPods";
+    }
+}
+
+const char *noise_control_mode_to_string(NoiseControlMode mode)
+{
+    switch (mode) {
+    case NOISE_CONTROL_OFF:
+        return "off";
+    case NOISE_CONTROL_ANC:
+        return "anc";
+    case NOISE_CONTROL_TRANSPARENCY:
+        return "transparency";
+    case NOISE_CONTROL_ADAPTIVE:
+        return "adaptive";
+    default:
+        return "off";
+    }
+}
+
+bool noise_control_mode_from_string(const char *str, NoiseControlMode *mode)
+{
+    if (str == NULL)
+        return false;
+
+    if (g_ascii_strcasecmp(str, "off") == 0) {
+        *mode = NOISE_CONTROL_OFF;
+    } else if (g_ascii_strcasecmp(str, "anc") == 0 ||
+               g_ascii_strcasecmp(str, "noise_cancellation") == 0 ||
+               g_ascii_strcasecmp(str, "cancellation") == 0) {
+        *mode = NOISE_CONTROL_ANC;
+    } else if (g_ascii_strcasecmp(str, "transparency") == 0 ||
+               g_ascii_strcasecmp(str, "transparent") == 0) {
+        *mode = NOISE_CONTROL_TRANSPARENCY;
+    } else if (g_ascii_strcasecmp(str, "adaptive") == 0) {
+        *mode = NOISE_CONTROL_ADAPTIVE;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+bool airpods_model_supports_anc(AirPodsModel model)
+{
+    switch (model) {
+    case BEATS_MODEL_POWERBEATS_FIT:
+    case AIRPODS_MODEL_PRO:
+    case AIRPODS_MODEL_PRO_2:
+    case AIRPODS_MODEL_PRO_2_USBC:
+    case AIRPODS_MODEL_PRO_3:
+    case AIRPODS_MODEL_MAX:
+    case AIRPODS_MODEL_MAX_USBC:
+    case AIRPODS_MODEL_MAX_2:
+    case AIRPODS_MODEL_4_ANC:
+    case AIRPODS_MODEL_5:
+    case AIRPODS_MODEL_5_WIRELESS_CHARGING:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool airpods_model_supports_adaptive(AirPodsModel model)
+{
+    switch (model) {
+    case AIRPODS_MODEL_PRO_2:
+    case AIRPODS_MODEL_PRO_2_USBC:
+    case AIRPODS_MODEL_PRO_3:
+    case AIRPODS_MODEL_4_ANC:
+    case AIRPODS_MODEL_5:
+    case AIRPODS_MODEL_5_WIRELESS_CHARGING:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool airpods_model_has_ble_case(AirPodsModel model)
+{
+    /* Find My cases, with their own radio, whose adverts decrypt with the
+     * encryption key. Not the AirPods 5 with Wireless Charging Case (#17). */
+    switch (model) {
+    case AIRPODS_MODEL_PRO_2:
+    case AIRPODS_MODEL_PRO_2_USBC:
+    case AIRPODS_MODEL_PRO_3:
+    case AIRPODS_MODEL_4_ANC:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool airpods_model_is_headphones(AirPodsModel model)
+{
+    switch (model) {
+    case AIRPODS_MODEL_MAX:
+    case AIRPODS_MODEL_MAX_USBC:
+    case AIRPODS_MODEL_MAX_2:
+        return true;
+    default:
+        return false;
+    }
+}
+
+AirPodsModel airpods_model_from_number(const char *model_number)
+{
+    if (model_number == NULL || model_number[0] == '\0')
+        return AIRPODS_MODEL_UNKNOWN;
+
+    /* Model numbers from https://support.apple.com/en-us/109525 */
+    static const struct {
+        const char *number;
+        AirPodsModel model;
+    } model_map[] = {
+        /* Powerbeats Fit earbuds. A3479 is the case, not an AAP peer.
+         * Model numbers: Beats' Powerbeats Fit Safety and Handling guide. */
+        {"A3476", BEATS_MODEL_POWERBEATS_FIT},
+        {"A3477", BEATS_MODEL_POWERBEATS_FIT},
+        /* AirPods 1st Gen */
+        {"A1523", AIRPODS_MODEL_1},
+        {"A1722", AIRPODS_MODEL_1},
+        /* AirPods 2nd Gen */
+        {"A2032", AIRPODS_MODEL_2},
+        {"A2031", AIRPODS_MODEL_2},
+        /* AirPods 3rd Gen */
+        {"A2565", AIRPODS_MODEL_3},
+        {"A2564", AIRPODS_MODEL_3},
+        /* AirPods 4th Gen */
+        {"A3053", AIRPODS_MODEL_4},
+        {"A3050", AIRPODS_MODEL_4},
+        {"A3054", AIRPODS_MODEL_4},
+        /* AirPods 4th Gen (ANC) */
+        {"A3056", AIRPODS_MODEL_4_ANC},
+        {"A3055", AIRPODS_MODEL_4_ANC},
+        {"A3057", AIRPODS_MODEL_4_ANC},
+        /* AirPods 5 */
+        {"A3531", AIRPODS_MODEL_5},
+        {"A3532", AIRPODS_MODEL_5},
+        {"A3533", AIRPODS_MODEL_5},
+        /* AirPods 5 with Wireless Charging Case */
+        {"A3439", AIRPODS_MODEL_5_WIRELESS_CHARGING},
+        {"A3440", AIRPODS_MODEL_5_WIRELESS_CHARGING},
+        {"A3441", AIRPODS_MODEL_5_WIRELESS_CHARGING},
+        /* AirPods Pro */
+        {"A2084", AIRPODS_MODEL_PRO},
+        {"A2083", AIRPODS_MODEL_PRO},
+        /* AirPods Pro 2 (Lightning) */
+        {"A2931", AIRPODS_MODEL_PRO_2},
+        {"A2699", AIRPODS_MODEL_PRO_2},
+        {"A2698", AIRPODS_MODEL_PRO_2},
+        /* AirPods Pro 2 (USB-C) */
+        {"A3047", AIRPODS_MODEL_PRO_2_USBC},
+        {"A3048", AIRPODS_MODEL_PRO_2_USBC},
+        {"A3049", AIRPODS_MODEL_PRO_2_USBC},
+        /* AirPods Pro 3 */
+        {"A3064", AIRPODS_MODEL_PRO_3},
+        {"A3065", AIRPODS_MODEL_PRO_3},
+        {"A3063", AIRPODS_MODEL_PRO_3},
+        /* AirPods Max (Lightning) */
+        {"A2096", AIRPODS_MODEL_MAX},
+        /* AirPods Max (USB-C) */
+        {"A3184", AIRPODS_MODEL_MAX_USBC},
+        /* AirPods Max 2 */
+        {"A3454", AIRPODS_MODEL_MAX_2},
+        {NULL, AIRPODS_MODEL_UNKNOWN}
+    };
+
+    for (int i = 0; model_map[i].number != NULL; i++) {
+        if (g_strcmp0(model_number, model_map[i].number) == 0) {
+            return model_map[i].model;
+        }
+    }
+
+    return AIRPODS_MODEL_UNKNOWN;
+}

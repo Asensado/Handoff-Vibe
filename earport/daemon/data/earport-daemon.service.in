@@ -1,0 +1,25 @@
+[Unit]
+Description=EarPort AirPods Daemon
+Documentation=https://github.com/Anoryth/earport
+After=bluetooth.target
+
+[Service]
+Type=dbus
+BusName=io.github.anoryth.EarPort
+ExecStart=@bindir@/earport-daemon
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Creates $XDG_CONFIG_HOME/earport before sandboxing and keeps it writable
+# (ReadWritePaths= would fail at namespace setup while the dir is missing)
+ConfigurationDirectory=earport
+# Holds the AirPods' keys: for this user only
+ConfigurationDirectoryMode=0700
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

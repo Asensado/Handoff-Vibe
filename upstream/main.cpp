@@ -5,8 +5,16 @@
 #include <QBluetoothAddress>
 #include <QTimer>
 #include <QDateTime>
+#include <QDir>
+#include <QSaveFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStandardPaths>
+#include <QRegularExpression>
+#include <QLockFile>
 #include <iostream>
 #include "packets.h"
+#include "headsetcontrols.h"
 #include "media/mediacontroller.h"
 
 QString getTimestamp() {
@@ -38,6 +46,19 @@ public:
         connect(keepaliveTimer, &QTimer::timeout, this, &AirPodsHandoff::checkNotificationHealth);
         keepaliveTimer->start(60000);  // Check every 60 seconds
 
+        auto statusTimer = new QTimer(this);
+        connect(statusTimer, &QTimer::timeout, this, &AirPodsHandoff::writeStatus);
+        statusTimer->start(5000);
+
+        controls = new HeadsetControls([this](const QByteArray &packet) -> qint64 {
+            return isSocketConnected() ? socket->write(packet) : -1;
+        }, this);
+        connect(controls, &HeadsetControls::changed, this, &AirPodsHandoff::writeStatus);
+        const auto runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        const auto compact = QString(airpodsMac).remove(':').toUpper();
+        if (!controls->listen(runtime + "/handoff/" + compact + ".sock"))
+            qWarning("Handoff noise-control endpoint could not start");
+
         // Connect to AirPods
         connectToAirPods();
     }
@@ -49,6 +70,10 @@ public:
 private slots:
     void onConnected() {
         std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Connected to AirPods" << std::endl;
+        ready = false;
+        if (controls) controls->setReady(false);
+        lastError.clear();
+        writeStatus();
 
         // Reset reconnection state on successful connection
         reconnectAttempts = 0;
@@ -66,6 +91,9 @@ private slots:
 
     void onDataReceived() {
         QByteArray data = socket->readAll();
+        if (data.startsWith(QByteArray::fromHex("04000400")))
+            lastNotificationTime = QDateTime::currentMSecsSinceEpoch();
+        controls->receive(data);
 
         // Debug: log all received data (commented out - uncomment for debugging)
         // if (data.size() > 0) {
@@ -74,6 +102,10 @@ private slots:
 
         // Handle FEATURES_ACK - send REQUEST_NOTIFICATIONS after receiving this
         if (data.startsWith(Packets::Connection::FEATURES_ACK)) {
+            ready = true;
+            controls->setReady(true);
+            lastError.clear();
+            writeStatus();
             std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Received FEATURES_ACK - requesting notifications" << std::endl;
             socket->write(Packets::Connection::REQUEST_NOTIFICATIONS);
 
@@ -132,14 +164,16 @@ private slots:
                 }
 
                 // Remember last non-NONE source
-                if (newSource.type != Packets::AudioSource::NONE) {
-                    currentSource = newSource;
-                }
+                currentSource = newSource;
+                switchingUntil = 0;
+                writeStatus();
             }
         }
     }
 
     void onPlaybackStarted() {
+        switchingUntil = QDateTime::currentMSecsSinceEpoch() + 3000;
+        writeStatus();
         // If socket is not connected, we can't do handoff - just try to force reclaim audio
         if (!isSocketConnected()) {
             std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Playback started but socket disconnected - forcing audio reclaim" << std::endl;
@@ -189,6 +223,9 @@ private slots:
         // Clear state since we can't get updates anymore
         currentSource = Packets::AudioSource::Info();
         shouldReclaimOnNone = false;
+        ready = false;
+        if (controls) controls->setReady(false);
+        writeStatus();
         lastNotificationTime = 0;  // Reset notification tracking
 
         // Don't schedule reconnection if already scheduled
@@ -197,7 +234,7 @@ private slots:
         }
 
         // Calculate exponential backoff delay (2s, 4s, 8s, max 30s)
-        int delay = std::min(2000 * (1 << reconnectAttempts), 30000);
+        int delay = std::min(2000 * (1 << std::min(reconnectAttempts, 4)), 30000);
         reconnectAttempts++;
 
         std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Scheduling reconnection in "
@@ -263,6 +300,10 @@ private slots:
     }
 
     void onError(QBluetoothSocket::SocketError error) {
+        ready = false;
+        if (controls) controls->setReady(false);
+        lastError = "Switching connection unavailable. See Advanced logs.";
+        writeStatus();
         std::cerr << "[" << getTimestamp().toStdString() << "] [Handoff] Socket error: " << static_cast<int>(error);
 
         // Log error type for debugging
@@ -295,7 +336,7 @@ private slots:
             }
 
             // Calculate exponential backoff delay (2s, 4s, 8s, max 30s)
-            int delay = std::min(2000 * (1 << reconnectAttempts), 30000);
+            int delay = std::min(2000 * (1 << std::min(reconnectAttempts, 4)), 30000);
             reconnectAttempts++;
 
             std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Scheduling reconnection in "
@@ -314,6 +355,26 @@ private slots:
     }
 
 private:
+    void writeStatus() {
+        QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        if (runtime.isEmpty()) return;
+        QDir().mkpath(runtime + "/handoff");
+        QString compact = QString(airpodsMac).remove(':').toUpper();
+        QJsonObject status = controls ? controls->status() : QJsonObject{};
+        status["updated"] = QDateTime::currentSecsSinceEpoch();
+        status["ready"] = ready && isSocketConnected();
+        status["switching"] = switchingUntil > QDateTime::currentMSecsSinceEpoch();
+        status["error"] = lastError;
+        status["owner"] = !currentSource.isValid ? "" :
+            currentSource.type == Packets::AudioSource::NONE ? "none" :
+            currentSource.deviceMac == localMac ? "linux" : "other";
+        QSaveFile file(runtime + "/handoff/" + compact + ".json");
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(status).toJson(QJsonDocument::Compact));
+            file.commit();
+        }
+    }
+
     void connectToAirPods() {
         std::cout << "[" << getTimestamp().toStdString() << "] [Handoff] Connecting to AirPods..." << std::endl;
 
@@ -338,6 +399,10 @@ private:
     }
 
     QString airpodsMac;
+    HeadsetControls *controls = nullptr;
+    bool ready = false;
+    QString lastError;
+    qint64 switchingUntil = 0;
     QByteArray localMac;
     QBluetoothSocket *socket = nullptr;
     MediaController *media = nullptr;
@@ -350,6 +415,8 @@ private:
 };
 
 int main(int argc, char *argv[]) {
+    // The upstream pactl parser expects English field names.
+    qputenv("LC_ALL", "C");
     QCoreApplication app(argc, argv);
 
     if (argc < 2) {
@@ -358,7 +425,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    QString airpodsMac = QString(argv[1]);
+    QString compact = QString(argv[1]).remove(':').toUpper();
+    if (!QRegularExpression("^[0-9A-F]{12}$").match(compact).hasMatch()) {
+        std::cerr << "Invalid headset Bluetooth address" << std::endl;
+        return 2;
+    }
+    QString airpodsMac;
+    for (int i = 0; i < 12; i += 2) {
+        if (i) airpodsMac += ':';
+        airpodsMac += compact.mid(i, 2);
+    }
+    QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (runtime.isEmpty()) return 3;
+    QDir().mkpath(runtime + "/handoff");
+    QLockFile lock(runtime + "/handoff/" + compact + ".lock");
+    if (!lock.tryLock(0)) {
+        std::cerr << "A Handoff engine already manages this headset" << std::endl;
+        return 4;
+    }
 
     std::cout << "=== AirPods Seamless Handoff ===" << std::endl;
     std::cout << "[" << getTimestamp().toStdString() << "] [Main] AirPods MAC: " << airpodsMac.toStdString() << std::endl;

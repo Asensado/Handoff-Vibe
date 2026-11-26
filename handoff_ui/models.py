@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
 """Conservative model catalog. Product IDs are data, not an authentication boundary."""
 from dataclasses import dataclass
 import re
@@ -18,7 +20,7 @@ MODELS = (
     Model('airpodspro2', 'AirPods Pro 2', 'H2', 'airpodspro2.png', (0x2014, 0x2024)),
     Model('airpodsmax', 'AirPods Max', 'H1', 'airpodsmax.png', (0x200a, 0x201f)),
     Model('beatsfitpro', 'Beats Fit Pro', 'H1', 'beatsfitpro.png', (0x2012,)),
-    Model('powerbeatsfit', 'Powerbeats Fit', 'H1', 'powerbeatsfit.png'),
+    Model('powerbeatsfit', 'Powerbeats Fit', 'H1', 'powerbeatsfit.png', (0x202f,)),
     Model('powerbeatspro', 'Powerbeats Pro', 'H1', 'powerbeatspro.png', (0x200b,)),
     Model('powerbeatspro2', 'Powerbeats Pro 2', 'H2', 'powerbeatspro2.png', (0x201d,)),
     Model('solopro', 'Beats Solo Pro', 'H1', 'solopro.png', (0x200c,)),

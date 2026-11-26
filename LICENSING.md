@@ -1,45 +1,42 @@
-# Licensing and scope
+# Licensing
 
-Handoff Vibe is source-available under **PolyForm Noncommercial 1.0.0** for
-Asensado's contributions. It is not presented as OSI-approved open-source
-software. The restriction covers commercial uses generally, not only resale;
-read the complete license for its permitted-purpose provisions and exceptions.
-Commercial permission outside those terms requires a separate written license
-from Asensado: https://github.com/Asensado/.
+Starting with **0.2.0**, Asensado licenses Handoff Vibe's original application,
+service integration, updater, packaging, tests and original artwork under
+**GNU GPL version 3 or, at your option, any later version** (`GPL-3.0-or-later`).
+The former noncommercial restriction is removed from these contributions.
+The 0.2.0 release replaces the old manufacturer photos with original, logo-free
+GPL-licensed device illustrations. Device names remain their owners’ trademarks.
+Personal, commercial and educational use are permitted. GPL obligations apply
+when covered software is conveyed, including preservation of notices and the
+availability of complete corresponding source for covered binaries. See the
+unmodified full license in [LICENSE](LICENSE).
 
-## Which terms cover which files?
+## Component scope
 
-| Material | Applicable terms |
+| Files/material | Terms |
 | --- | --- |
-| `handoff_ui/`, `gnome-extension/`, `packaging/`, `tests/`, `handoff-vibe`, original documentation and original app artwork | PolyForm Noncommercial 1.0.0, to the extent licensable by Asensado |
-| `patches/0001-gui-integration.patch` | PolyForm Noncommercial 1.0.0 for Asensado's original additions; unchanged context from upstream remains MIT |
-| Original code in `upstream/` | MIT, with original attribution retained in `upstream/LICENSE` |
-| `LICENSE` and texts in `LICENSES/` | Respective license texts; their inclusion does not relicense third-party code |
-| Apple/Beats product photos under `assets/` | Third-party assets, not licensed for redistribution by Asensado; see `assets/sources.json` and `THIRD_PARTY.md` |
-| World English Bible passages in `assets/verses.json` | Public domain translation; original selection/integration does not restrict the underlying text |
+| Handoff GTK app, original integration, packaging and tests | GPL-3.0-or-later, copyright 2026 Asensado |
+| Original xatuke/handoff code in `upstream/` | MIT; original rights and notices retained in `upstream/LICENSE` and `LICENSES/MIT-upstream.txt` |
+| Asensado's additions/modifications to the original Qt engine | GPL-3.0-or-later; unchanged MIT code remains MIT |
+| `earport/` backend and local modifications | GPL-3.0-or-later; upstream copyright headers, full source, build scripts and credits retained |
+| Complete `gnome-extension/` companion | GPL-3.0-or-later; imported Earport components retain their original notices |
+| Original device illustrations in `assets/` | GPL-3.0-or-later, copyright 2026 Asensado |
+| World English Bible passages | Public domain; not restricted by the code license |
 
-The build copies the pristine MIT engine into `build/engine-source/` and
-applies the integration patch there. This keeps upstream code and project
-additions distinguishable. A compiled engine containing both has the
-corresponding MIT and PolyForm obligations for its respective portions.
+The original MIT code can be used under its own MIT terms independently.
+GPL code is not relabelled as MIT or subjected to an additional noncommercial
+restriction. The separate Earport executable communicates with Handoff over
+D-Bus; its complete corresponding source is shipped with the source release,
+and is also included in the Debian package documentation.
 
-MIT permits distribution of modifications and larger works under different
-terms while requiring preservation of its notices. Nothing here removes the
-original author's MIT permissions or prevents independent use, modification,
-or sale of the original MIT engine. This project cannot impose restrictions
-on other parties' code or assets.
+`earport/UPSTREAM.txt` identifies the vendored upstream commit and local changes;
+`earport/CREDITS` preserves LibrePods protocol-research acknowledgments. The
+release includes the source actually used to build its binaries, along with
+build and installation scripts.
 
-## Previous MIT copies
+Earlier copies retain permissions already granted with those copies. This
+license change does not retract previous MIT permissions or erase third-party
+copyrights. The app's About page and the README state the current GPL license.
 
-This edition does not retract permissions already granted for earlier copies
-distributed under MIT. In particular, changing this archive's license cannot
-retroactively prevent recipients of a previous MIT-licensed copy from using
-that copy under its existing terms.
-
-## GitHub
-
-Add the included `LICENSE`, `NOTICE`, `LICENSING.md`, `LICENSES/`, and upstream
-notices to the repository. PolyForm is added as a license file manually; no
-claim is made that it appears in GitHub's new-repository license picker or
-will receive a particular automatic license badge. Keep third-party notices.
-Review photo redistribution rights before publishing bundled product images.
+See [NOTICE](NOTICE), [THIRD_PARTY.md](THIRD_PARTY.md), [earport/LICENSE](earport/LICENSE)
+and [gnome-extension/LICENSE](gnome-extension/LICENSE) for retained notices.

@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
 """A small, native, terminal-free front end for xatuke/handoff."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +17,8 @@ from . import backend as B
 from .models import MODELS, BY_KEY, identify
 from .verses import daily_verse
 from .about import About
+from . import releases as R
+from . import __version__
 
 ASSETS = B.ROOT / 'assets'
 CSS = b'''
@@ -35,6 +39,17 @@ window { }
 .setup-step { font-size: 11px; font-weight: 700; letter-spacing: 1.3px; color: @accent_color; }
 .logview { font-size: 11px; padding: 14px; }
 .device-choice { margin: 5px 0; }
+.noise-track { background: alpha(@window_fg_color, 0.07); border-radius: 999px; padding: 4px; }
+button.noise-mode { min-width: 44px; min-height: 44px; padding: 0; border-radius: 999px; background: transparent; box-shadow: none; border: none; }
+button.noise-mode:hover { background: alpha(@window_fg_color, 0.08); }
+button.noise-mode.suggested-action { background: @accent_bg_color; color: @accent_fg_color; }
+.noise-caption { font-size: 11px; }
+.noise-caption.selected { font-weight: 700; color: @window_fg_color; }
+.release-card { padding: 16px; }
+.release-badge { border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; }
+.release-badge.stable { color: @success_color; background: alpha(@success_color, 0.14); }
+.release-badge.beta { color: @warning_color; background: alpha(@warning_color, 0.14); }
+.release-badge.experimental { color: white; background: #813d9c; }
 '''
 
 
@@ -127,7 +142,7 @@ class Handoff(Adw.Application):
             return
         self.set_accels_for_action('app.logs', ['<Primary>l'])
         self.set_accels_for_action('app.quit', ['<Primary>q'])
-        for name, fn in [('preferences', self.preferences), ('logs', self.logs), ('about', self.about), ('quit', lambda *_: self.window.close())]:
+        for name, fn in [('preferences', self.preferences), ('logs', self.logs), ('about', self.about), ('whats-new', self.show_whats_new), ('quit', lambda *_: self.window.close())]:
             act = Gio.SimpleAction.new(name, None)
             act.connect('activate', fn)
             self.add_action(act)
@@ -142,11 +157,13 @@ class Handoff(Adw.Application):
         self.window.set_content(self.overlay)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.overlay.set_child(root)
+        self.pages = Gtk.Stack(vexpand=True, transition_type=Gtk.StackTransitionType.CROSSFADE)
         head = Adw.HeaderBar()
         head.set_decoration_layout(':close')
         head.set_title_widget(label('Handoff Vibe', 'heading'))
         menu = Gio.Menu()
         menu.append('Preferences', 'app.preferences')
+        menu.append("What's new?", 'app.whats-new')
         menu.append('Advanced logs', 'app.logs')
         menu.append('About Handoff Vibe', 'app.about')
         menu.append('Quit', 'app.quit')
@@ -156,8 +173,32 @@ class Handoff(Adw.Application):
         self.banner.set_button_label('Details')
         self.banner.connect('button-clicked', lambda *_: self.error(self.last_error))
         root.append(self.banner)
+        self.update_banner = Adw.Banner(title='', revealed=False)
+        self.update_banner.set_button_label("What's new?")
+        self.update_banner.connect('button-clicked', self.show_whats_new)
+        root.append(self.update_banner)
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
-        root.append(scroll)
+        root.append(self.pages)
+        self.pages.add_titled(scroll, 'headset', 'Headset')
+        release_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        release_box = margins(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16), 20)
+        release_scroll.set_child(release_box)
+        self.releases_status = label('Release notes from Asensado/Handoff-Vibe', 'dim-label')
+        release_box.append(self.releases_status)
+        release_box.append(button('Check for updates', lambda *_: self.check_updates()))
+        self.install_update_button = button('Install update', lambda *_: self.install_update())
+        self.install_update_button.set_visible(False)
+        release_box.append(self.install_update_button)
+        release_box.append(Gtk.LinkButton(uri=R.REPOSITORY + '/releases', label='Open GitHub releases'))
+        self.release_entries = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        release_box.append(self.release_entries)
+        self.releases_window = Adw.Window(transient_for=self.window, title="What's new?", default_width=480, default_height=620)
+        release_root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        release_root.append(Adw.HeaderBar())
+        release_root.append(release_scroll)
+        release_scroll.set_vexpand(True)
+        self.releases_window.set_content(release_root)
+        self.releases_window.set_hide_on_close(True)
         body = margins(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8), 20)
         scroll.set_child(body)
         if self.demo:
@@ -169,7 +210,7 @@ class Handoff(Adw.Application):
         self.stage.add_css_class('product-stage')
         self.picture = Gtk.Picture(width_request=176, height_request=176, can_shrink=True)
         self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
-        self.picture.set_alternative_text('Headset product photo')
+        self.picture.set_alternative_text('Original headset illustration')
         self.stage.append(self.picture)
         body.append(self.stage)
         self.name = label('', 'hero-title')
@@ -190,6 +231,42 @@ class Handoff(Adw.Application):
         self.multi = Gtk.DropDown.new_from_strings([''])
         self.multi.connect('notify::selected', self.select_profile)
         body.append(self.multi)
+        self.controls_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.controls_box.set_margin_top(0)
+        self.controls_box.append(label('NOISE CONTROL', 'section-label dim-label'))
+        choices = Gtk.Box(homogeneous=True, spacing=0)
+        choices.add_css_class('noise-track')
+        captions = Gtk.Box(homogeneous=True, spacing=0)
+        self.noise_buttons = {}
+        self.noise_captions = {}
+        icon_folder = (Path('/usr/share/gnome-shell/extensions') / B.EXTENSION_UUID if B.INSTALLED else B.ROOT / 'gnome-extension') / 'icons'
+        for mode, title in [('anc', 'Noise cancellation'), ('off', 'Off'), ('transparency', 'Transparency')]:
+            holder = Gtk.Box(halign=Gtk.Align.FILL, hexpand=True)
+            choice = Gtk.Button(halign=Gtk.Align.CENTER, hexpand=True, tooltip_text=title)
+            choice.add_css_class('noise-mode')
+            image = Gtk.Image.new_from_gicon(Gio.FileIcon.new(Gio.File.new_for_path(str(icon_folder / f'handoff-noise-{mode}-symbolic.svg'))))
+            image.set_pixel_size(24)
+            choice.set_child(image)
+            choice.update_property([Gtk.AccessibleProperty.LABEL], [title])
+            choice.connect('clicked', lambda _, selected=mode: self.change_noise_control(selected))
+            self.noise_buttons[mode] = choice
+            holder.append(choice)
+            choices.append(holder)
+            caption = label(title, 'noise-caption dim-label')
+            self.noise_captions[mode] = caption
+            captions.append(caption)
+        self.controls_box.append(choices)
+        self.controls_box.append(captions)
+        self.controls_note = label('Waiting for headset controls', 'caption dim-label')
+        self.controls_box.append(self.controls_note)
+        self.battery_label = label('', 'caption dim-label')
+        self.battery_label.set_visible(False)
+        body.append(self.battery_label)
+        self.listening_label = label('', 'caption dim-label')
+        self.listening_label.set_visible(False)
+        body.append(self.listening_label)
+        self.controls_box.set_visible(False)
+        body.append(self.controls_box)
         bottom_spacer = Gtk.Box(vexpand=True)
         bottom_spacer.set_size_request(-1, 6)
         body.append(bottom_spacer)
@@ -215,6 +292,8 @@ class Handoff(Adw.Application):
         self.window.present()
         if not self.demo:
             self.bootstrap()
+            if self.config.get('check_updates', True):
+                self.check_updates()
             GLib.timeout_add_seconds(3, self.poll)
             if self.args.screen == 'logs': GLib.idle_add(self.logs)
         else:
@@ -225,6 +304,8 @@ class Handoff(Adw.Application):
             self.background_switch.set_active(True)
             self.syncing_switch = False
             self.info.set_label('Audio: this laptop · Other connections unknown')
+            self.update_controls(dict(updated=time.time(), controls_ready=True, noise_control='transparency',
+                battery_left=78, battery_right=77, battery_case=-1, listening_minutes=-1))
             if self.args.screen == 'setup':
                 GLib.idle_add(lambda: self.open_setup())
             elif self.args.screen == 'logs':
@@ -254,6 +335,7 @@ class Handoff(Adw.Application):
     def set_status(self, state, details=None):
         names = {
             'cli': ('●  CLI mode', 'idle', 'Managed by the command-line version.'),
+            'handoff': ('●  Handoff', 'switching', 'Audio is playing on another device.'),
             'active': ('●  Active', 'active', 'Ready to follow your audio.'),
             'switching': ('●  Switching audio', 'switching', 'Moving your sound between devices.'),
             'connected': ('●  Connected', 'active', 'Your headset is connected to this laptop.'),
@@ -336,6 +418,7 @@ class Handoff(Adw.Application):
             if self.config.get('cli_mode') or not self.device or self.device['mac'] != d['mac']:
                 return
             device, service, protocol = result
+            self.update_controls(protocol)
             self.current_service = service
             self.current_connected = bool(device and device['connected'])
             running = service.get('ActiveState') in ('active', 'activating')
@@ -351,7 +434,7 @@ class Handoff(Adw.Application):
             elif not self.current_connected:
                 self.set_status('disconnected')
             elif fresh and protocol.get('ready'):
-                self.set_status('switching' if protocol.get('switching') else 'active')
+                self.set_status('switching' if protocol.get('switching') else 'handoff' if protocol.get('owner') == 'other' else 'active')
             elif fresh and protocol.get('error'):
                 self.set_status('error', protocol['error'])
             else:
@@ -463,10 +546,176 @@ class Handoff(Adw.Application):
         dialog.connect('response', response)
         dialog.present()
 
+    def update_controls(self, protocol):
+        device = self.device
+        allowed = device and device.get('model') in ('powerbeatsfit', 'beatsfitpro', 'powerbeatspro2', 'solopro', 'airpodspro', 'airpodspro2', 'airpodsmax', 'airpods4')
+        self.controls_box.set_visible(bool(allowed or protocol.get('controls_ready')))
+        import time
+        fresh = time.time() - protocol.get('updated', 0) < 15
+        ready = fresh and protocol.get('controls_ready', False)
+        pending = protocol.get('noise_pending', '')
+        for mode, choice in self.noise_buttons.items():
+            choice.set_sensitive(bool(ready and not pending))
+            if ready and protocol.get('noise_control') == mode:
+                choice.add_css_class('suggested-action')
+                self.noise_captions[mode].add_css_class('selected')
+            else:
+                choice.remove_css_class('suggested-action')
+                self.noise_captions[mode].remove_css_class('selected')
+        self.controls_note.set_label(protocol.get('control_error') or
+            ('Waiting for headset confirmation…' if pending else
+             'Controls stay available while another device plays audio.' if ready else
+             'Waiting for the headset to announce noise-control support.'))
+        self.controls_note.set_visible(bool(not ready or pending or protocol.get('control_error')))
+        levels = []
+        for key, name in [('left', 'Left'), ('right', 'Right'), ('case', 'Case')]:
+            level = protocol.get('battery_' + key, -1) if fresh else -1
+            if 0 <= level <= 100:
+                levels.append(f'{name} {level}%' + (' ⚡' if protocol.get('charging_' + key) else ''))
+        self.battery_label.set_label(' · '.join(levels))
+        self.battery_label.set_visible(bool(levels))
+        minutes = protocol.get('listening_minutes', -1)
+        self.listening_label.set_label(f'About {minutes // 60}:{minutes % 60:02d} of listening left' if fresh and minutes >= 0 else '')
+        self.listening_label.set_visible(bool(fresh and minutes >= 0))
+
+    def change_noise_control(self, mode):
+        if not self.device or self.demo:
+            return
+        device = dict(self.device)
+        for choice in self.noise_buttons.values():
+            choice.set_sensitive(False)
+        self.controls_note.set_label('Sending headset command…')
+        self.controls_note.set_visible(True)
+        def done(protocol):
+            if self.device and self.device['mac'] == device['mac']:
+                protocol['updated'] = time.time()
+                self.update_controls(protocol)
+        self.job(lambda: B.set_noise_control(device, mode), done, self.error)
+
+    def change_engine_setting(self, key, value):
+        self.config[key] = value
+        self.store()
+        if not self.demo:
+            self.job(lambda: B.engine_setting(key, value), None,
+                     lambda _: self.toast('Setting saved. Start Handoff to apply it.'))
+
+    def change_update_checks(self, enabled):
+        self.config['check_updates'] = enabled
+        self.store()
+        if enabled:
+            self.check_updates()
+
+    def change_automatic_updates(self, enabled, switch):
+        if getattr(self, '_syncing_updates', False):
+            return
+        switch.set_sensitive(False)
+        def done(_):
+            switch.set_sensitive(True)
+            self.toast('Automatic updates enabled after APT refresh.' if enabled else 'Automatic updates disabled.')
+        def failed(message):
+            self._syncing_updates = True
+            switch.set_active(not enabled)
+            self._syncing_updates = False
+            switch.set_sensitive(True)
+            self.error(message)
+        self.job(lambda: B.run(['pkexec', '/usr/libexec/handoff/update-handoff', 'enable' if enabled else 'disable'], timeout=120), done, failed)
+
+    def show_whats_new(self, *_):
+        self.releases_window.present()
+        if not self.demo:
+            self.check_updates()
+
+    def check_updates(self):
+        if self.demo or getattr(self, '_checking_updates', False):
+            return
+        self._checking_updates = True
+        self.releases_status.set_label('Checking GitHub releases…')
+        def done(releases):
+            self.show_releases(releases)
+        def failed(message):
+            self._checking_updates = False
+            self.releases_status.set_label('Could not check GitHub releases. Check your connection or open the releases page.')
+        self.job(lambda: R.fetch_releases(include_prereleases=True), done, failed)
+
+    def show_releases(self, releases):
+        self._checking_updates = False
+        self.releases_status.set_label(f'Installed build: {__version__}')
+        child = self.release_entries.get_first_child()
+        while child:
+            self.release_entries.remove(child)
+            child = self.release_entries.get_first_child()
+        for release in releases:
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            card.add_css_class('card')
+            card.add_css_class('release-card')
+            heading = Gtk.Box(spacing=8)
+            title = label(release['title'], 'heading')
+            title.set_xalign(0)
+            title.set_hexpand(True)
+            heading.append(title)
+            channel = release.get('channel', 'stable')
+            badge = label({'stable': 'Stable', 'beta': 'Beta', 'experimental': 'Experimental'}[channel], f'release-badge {channel}')
+            badge.set_valign(Gtk.Align.CENTER)
+            heading.append(badge)
+            card.append(heading)
+            date = label(' · '.join(part for part in [release['tag'], release['date']] if part), 'caption dim-label')
+            date.set_xalign(0)
+            card.append(date)
+            description = label(release['body'])
+            description.set_xalign(0)
+            description.set_justify(Gtk.Justification.LEFT)
+            description.set_selectable(True)
+            card.append(description)
+            self.release_entries.append(card)
+        stable = next((release for release in releases if release.get('channel') == 'stable'), None)
+        newer = bool(stable and R.version_tuple(stable['version']) > R.version_tuple(__version__))
+        self.update_banner.set_title('Handoff ' + stable['version'] + ' is available' if newer else '')
+        self.update_banner.set_revealed(newer)
+        self.install_update_button.set_visible(newer)
+        if not releases:
+            self.releases_status.set_label('No release notes have been published yet.')
+
+    def install_update(self):
+        self.install_update_button.set_sensitive(False)
+        self.releases_status.set_label('Downloading and installing the latest stable build…')
+        def done(message):
+            self.install_update_button.set_sensitive(True)
+            self.releases_status.set_label(message)
+        def failed(message):
+            self.install_update_button.set_sensitive(True)
+            self.releases_status.set_label(message)
+        self.job(lambda: B.run(['pkexec', '/usr/libexec/handoff/update-handoff', 'run'], timeout=900), done, failed)
+
     def preferences(self, *_):
         win = Adw.PreferencesWindow(transient_for=self.window, modal=True, title='Preferences', default_width=400, default_height=580)
         page = Adw.PreferencesPage()
         win.add(page)
+        connection = Adw.PreferencesGroup(title='Headset connection')
+        page.add(connection)
+        for key, title, description in [
+            ('auto_connect', 'Automatic connection', 'Connect when worn or when computer playback starts. Do not take audio from another device playing music or in a call.'),
+        ]:
+            item, _ = switch_row(title, description, self.config.get(key, False),
+                                  lambda active, setting=key: self.change_engine_setting(setting, active))
+            connection.add(item)
+        try:
+            proximity_enabled = B.proximity_enabled()
+        except Exception:
+            proximity_enabled = True
+        item, _ = switch_row('Proximity card', 'Show nearby case batteries and a Connect button. Requires the GNOME companion and a previously connected supported headset.',
+                             proximity_enabled, lambda enabled: None if self.demo else self.job(lambda: B.set_proximity_enabled(enabled)))
+        connection.add(item)
+        ear = Adw.ComboRow(title='Pause when taking earbuds out', model=Gtk.StringList.new(['Never', 'Either earbud', 'Both earbuds']))
+        ear.set_selected(self.config.get('ear_pause_mode', 1))
+        ear.connect('notify::selected', lambda choice, _: self.change_engine_setting('ear_pause_mode', choice.get_selected()))
+        connection.add(ear)
+        updates = Adw.PreferencesGroup(title='Updates', description='Stable, beta and experimental release notes from GitHub. Automatic installation uses stable builds only.')
+        page.add(updates)
+        item, _ = switch_row('Check for updates on launch', 'Show a banner when a newer stable build is available.', self.config.get('check_updates', True), self.change_update_checks)
+        updates.add(item)
+        item, automatic_switch = switch_row('Update after APT refresh', 'Install newer verified GitHub release packages after sudo apt update. Enabling this requires administrator authentication.', Path('/etc/handoff/automatic-updates').exists(), lambda enabled: self.change_automatic_updates(enabled, automatic_switch))
+        automatic_switch.set_sensitive(not self.demo)
+        updates.add(item)
         appearance = Adw.PreferencesGroup(title='Appearance')
         page.add(appearance)
         theme = Adw.ComboRow(title='Theme', model=Gtk.StringList.new(['Follow system', 'Light', 'Dark']))
