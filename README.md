@@ -48,6 +48,8 @@ After installation or an extension update, **sign out and back in**. Open **Pref
 
 Handoff's top-bar menu contains batteries, listening time when available, and noise controls. Volume and output selection stay in GNOME's own sound menu.
 
+![Handoff Vibe GNOME top-bar menu with headset batteries and noise controls](docs/images/gnome-menu.png)
+
 ## Compatibility
 
 | AirPods in the setup catalog | Beats in the setup catalog |
