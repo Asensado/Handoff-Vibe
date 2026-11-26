@@ -295,6 +295,32 @@ static void test_duplicate_connected_does_not_bypass_backoff(Fixture *f, gconstp
     g_assert_cmpint(fake_bt.connect_count, ==, 6);
 }
 
+/* Exhausted retries are not a permanent dead end while BlueZ is connected. */
+static void test_recovers_after_cooldown(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    fake_bt.refuse_connects = 100;
+    aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+    RUN_UNTIL(fake_bt.connect_count == 6);
+    fake_bt.refuse_connects = 0;
+    RUN_UNTIL(fake_bt.connect_count == 7);
+    g_assert_true(aap_link_is_connected(f->link));
+    fake_bt_receive(battery, sizeof(battery));
+    run_for(100);
+    g_assert_cmpint(fake_bt.connect_count, ==, 7);
+}
+
+static void test_disconnect_cancels_cooldown(Fixture *f, gconstpointer data)
+{
+    (void)data;
+    fake_bt.refuse_connects = 100;
+    aap_link_device_connected(f->link, ADDRESS, "AirPods Pro");
+    RUN_UNTIL(fake_bt.connect_count == 6);
+    aap_link_device_disconnected(f->link);
+    run_for(500);
+    g_assert_cmpint(fake_bt.connect_count, ==, 6);
+}
+
 static void test_gives_up(Fixture *f, gconstpointer data)
 {
     (void)data;
@@ -503,6 +529,8 @@ int main(int argc, char *argv[])
     ADD("/link/silent-reopen-restores-battery", test_silent_reopen_restores_battery);
     ADD("/link/refused-then-backoff", test_refused_then_backoff);
     ADD("/link/duplicate-connected-backoff", test_duplicate_connected_does_not_bypass_backoff);
+    ADD("/link/recovers-after-cooldown", test_recovers_after_cooldown);
+    ADD("/link/disconnect-cancels-cooldown", test_disconnect_cancels_cooldown);
     ADD("/link/gives-up", test_gives_up);
     ADD("/link/peer-closes", test_peer_closes);
     ADD("/link/bluez-disconnect", test_bluez_disconnect);

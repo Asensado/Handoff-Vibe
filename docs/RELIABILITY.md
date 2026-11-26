@@ -28,7 +28,10 @@ Handoff now owns process lifecycle in `handoff_ui/lifecycle.py` and
   cancels automatic takeover timers and blocks automatic Tipi playback claims.
 - Repaired control channels invalidate old ownership telemetry until a new
   source report arrives. Repeated BlueZ connection signals cannot reset or bypass
-  the reconnect budget. Successful battery telemetry replenishes that budget.
+  the reconnect budget. Successful battery telemetry replenishes that budget. After an exhausted
+  burst, a 60-second cooldown permits another control-channel probe while BlueZ
+  remains connected; it does not disconnect/reconnect the whole headset or claim
+  audio. BlueZ disconnection cancels the probe.
 
 These changes harden the current transport. They do **not** claim to solve every
 multi-host contention or stale audio route scenario, and do not implement the
