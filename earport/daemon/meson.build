@@ -236,7 +236,7 @@ test('link-trace', test_link_trace)
 # Against a fake pactl written by the test
 test_audio_route = executable('test-audio-route',
     files('tests/test_audio_route.c', '../../native/audio_repair.c'),
-    c_args: ['-DAUDIO_REPAIR_TESTING', '-DAUDIO_REPAIR_STEP_MS=100', '-DAUDIO_REPAIR_SETTLE_MS=30'],
+    c_args: ['-DAUDIO_REPAIR_TESTING', '-DAUDIO_REPAIR_SETTLE_MS=30'],
     include_directories: include_directories('src'),
     dependencies: [glib_dep, gio_dep],
 )
