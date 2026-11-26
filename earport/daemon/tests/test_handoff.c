@@ -288,6 +288,11 @@ static void test_call_supersedes_playback(void)
     run_for(300);
     g_assert_cmpint(calls.restarted, ==, 0);
     g_assert_cmpint(calls.tried_again, ==, 0);
+    /* The call has ended: new local playback is allowed again. */
+    handoff_source_changed(h, "none", false);
+    handoff_playback_started(h);
+    run_for(50);
+    g_assert_cmpint(calls.restarted, ==, 1);
     handoff_free(h);
 }
 

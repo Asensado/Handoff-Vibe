@@ -241,7 +241,8 @@ void handoff_use_here(Handoff *handoff)
 
 void handoff_playback_started(Handoff *handoff)
 {
-    if (!handoff->enabled || !handoff->taken || handoff->call)
+    if (!handoff->enabled || !handoff->taken ||
+        (handoff->call && g_strcmp0(handoff->source, "other") == 0))
         return;
 
     cancel(&handoff->keep_id);
