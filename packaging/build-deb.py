@@ -55,7 +55,7 @@ WORK = BUILD / 'shlibdeps'
 (WORK / 'debian/control').write_text('Source: handoff\nSection: sound\nPriority: optional\nMaintainer: Asensado <asensado@users.noreply.github.com>\n\nPackage: handoff\nArchitecture: any\nDescription: Handoff GUI\n')
 result = subprocess.check_output(['dpkg-shlibdeps', '-O', '-e' + str(BUILD / 'airpods-handoff'), '-e' + str(EARPORT_BUILD / 'earport-daemon')], cwd=WORK, text=True)
 shared = next(line.split('=', 1)[1] for line in result.splitlines() if line.startswith('shlibs:Depends='))
-deps = 'python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.8), gir1.2-adw-1 (>= 1.3), bluez, systemd, pulseaudio-utils, pkexec, ' + shared
+deps = 'python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.8), gir1.2-adw-1 (>= 1.3), bluez, systemd, pulseaudio-utils, pkexec, librsvg2-common, ' + shared
 (STAGE / 'DEBIAN/control').write_text(f'''Package: handoff-vibe
 Version: 0.2.0
 Replaces: handoff (<< 0.3.0)

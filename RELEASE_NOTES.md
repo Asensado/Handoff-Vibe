@@ -1,5 +1,7 @@
 ## Version 0.2.0
 
+This corrected prerelease includes the SVG loader needed by the noise-control icons on clean installations and regenerates the setup guide images.
+
 - Earport backend integrated into Handoff for compatible AirPods and Beats, with exact Powerbeats Fit recognition.
 - ANC, Transparency and Off controls in the app and Handoff top-bar menu. Powerbeats Fit controls were verified while iPhone audio kept playing.
 - Individual battery levels, learned listening-time estimates, ear-detection pause/resume and optional proximity cards.

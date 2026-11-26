@@ -7,7 +7,9 @@ import sys
 import traceback
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from handoff_ui.app import Handoff, Setup
-from gi.repository import GLib
+import gi
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import GLib, GdkPixbuf
 
 args = Namespace(demo=True, screen='device', model='powerbeatsfit', theme='light', state='active', quit_after=0)
 app = Handoff(args)
@@ -24,6 +26,8 @@ def capture(window, name):
 
 
 def test_device():
+    for icon in (Path(__file__).resolve().parents[1] / 'gnome-extension/icons').glob('*.svg'):
+        assert GdkPixbuf.Pixbuf.new_from_file(str(icon)).get_width() > 0
     assert app.name.get_label() == 'Powerbeats Fit'
     assert app.window.get_title() == 'Handoff Vibe'
     assert ' · WEB' in app.verse.get_label()

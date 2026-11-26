@@ -160,7 +160,7 @@ class Handoff(Adw.Application):
         self.pages = Gtk.Stack(vexpand=True, transition_type=Gtk.StackTransitionType.CROSSFADE)
         head = Adw.HeaderBar()
         head.set_decoration_layout(':close')
-        head.set_title_widget(label('Handoff Vibe', 'heading'))
+        head.set_title_widget(Adw.WindowTitle(title='Handoff Vibe'))
         menu = Gio.Menu()
         menu.append('Preferences', 'app.preferences')
         menu.append("What's new?", 'app.whats-new')
