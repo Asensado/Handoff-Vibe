@@ -59,9 +59,33 @@ def test_dark():
 def test_logs():
     capture(app.logs_window, 'advanced-logs.png')
     app.logs_window.close()
+    assert app.logs_timer is None
+    app.logs()
+    assert app.logs_timer is not None
+    app.logs_window.close()
+    assert app.logs_timer is None
     app.apply_theme('light')
+    # A queued read may complete after its log window is replaced.
+    from unittest.mock import patch
+    app.logs()
+    app.demo = False
+    callbacks = []
+    with patch.object(app, 'job', side_effect=lambda work, done=None, error=None, **kwargs: callbacks.append(done)):
+        app.refresh_logs()
+        app.refresh_logs()
+        assert len(callbacks) == 1
+        app.logs_window.close()
+        app.logs()
+        callbacks[0]('stale result from closed window')
+        assert 'stale result' not in app.logbuffer.get_text(app.logbuffer.get_start_iter(), app.logbuffer.get_end_iter(), False)
+    app.demo = True
+    app.logs_window.close()
     app.preferences()
     from handoff_ui import releases as R
+    from unittest.mock import patch
+    with patch('handoff_ui.app.__version__', '0.2.0-PRE.2'):
+        app.show_releases(R.parse_releases([dict(tag_name='v0.2.0', body='Stable notes')]))
+        assert app.update_banner.get_revealed()
     app.show_releases(R.parse_releases([
         dict(tag_name='v0.2.0', body='Stable release notes'),
         dict(tag_name='v0.3.0-beta.1', prerelease=True, body='Beta release notes'),
@@ -141,7 +165,8 @@ def test_profiles():
     assert app.device['model'] == 'airpodspro2'
     app.config['cli_mode'] = True
     app.render_cli()
-    assert 'CLI mode' in app.pill.get_label()
+    assert 'Previous installation' in app.pill.get_label()
+    assert app.primary.get_label() == 'Use Handoff Vibe'
     assert not app.background.get_visible()
     app.primary_clicked()
     assert not app.config['cli_mode']
@@ -155,8 +180,32 @@ def test_profiles():
 
 def test_empty():
     capture(app.window, 'welcome.png')
-    print('UI smoke tests passed: light/dark, statuses, logs, preferences, credits, all setup steps, unsupported-device rejection, profiles, empty state.')
-    app.quit()
+    app.setup = type('BusySetup', (), {'busy': True})()
+    assert app.close_main() is True
+    app.setup = None
+    import threading
+    hold = threading.Event()
+    setup_started = threading.Event()
+    controlled = []
+    def slow_setup():
+        setup_started.set()
+        hold.wait(3)
+    app.job(slow_setup, lane='setup')
+    app.job(lambda: 'control completed', lambda result: controlled.append(result))
+    deadline = GLib.get_monotonic_time() + 2 * GLib.USEC_PER_SEC
+    def check_workers():
+        if setup_started.is_set() and controlled:
+            hold.set()
+            print('UI smoke tests passed: native screens, log lifetimes, busy setup, prerelease comparison and independent control worker.')
+            app.quit()
+            return GLib.SOURCE_REMOVE
+        if GLib.get_monotonic_time() > deadline:
+            hold.set()
+            failures.append('Slow setup starved the control worker')
+            app.quit()
+            return GLib.SOURCE_REMOVE
+        return GLib.SOURCE_CONTINUE
+    GLib.timeout_add(20, check_workers)
 
 
 def guarded(fn):

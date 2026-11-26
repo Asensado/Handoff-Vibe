@@ -10,6 +10,7 @@ import tempfile
 import socket
 from gi.repository import Gio, GLib
 from .models import BY_KEY, valid_mac, identify
+from .settings import normalize_settings
 
 CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'handoff'
 CONFIG = CONFIG_DIR / 'gui.json'
@@ -33,10 +34,11 @@ def load_config():
             raise ValueError('Expected an object')
     except (OSError, ValueError):
         data = {}
+    data = normalize_settings(data)
     candidates = data.get('devices', [])
     if not isinstance(candidates, list):
         candidates = []
-    data['devices'] = [d for d in candidates if isinstance(d, dict) and valid_mac(d.get('mac')) and d.get('model') in BY_KEY]
+    data['devices'] = [d for d in candidates if isinstance(d, dict) and valid_mac(d.get('mac')) and isinstance(d.get('model'), str) and d['model'] in BY_KEY]
     for d in data['devices']:
         d['mac'] = d['mac'].upper()
         if not isinstance(d.get('name'), str) or not d['name']:
@@ -173,18 +175,31 @@ EARPORT_PATH = '/io/github/anoryth/EarPort'
 EARPORT_IFACE = 'io.github.anoryth.EarPort1'
 
 
-def engine_call(method, params=None):
+def engine_call(method, params=None, *, device=None):
+    if not isinstance(device, dict) or not valid_mac(device.get('mac')):
+        raise RuntimeError('Select a headset before sending a command.')
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-    result = bus.call_sync(EARPORT_BUS, EARPORT_PATH, EARPORT_IFACE, method, params,
-                           None, Gio.DBusCallFlags.NO_AUTO_START, 4000, None)
+    owner = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+        'org.freedesktop.DBus', 'GetNameOwner', GLib.Variant('(s)', (EARPORT_BUS,)),
+        None, Gio.DBusCallFlags.NO_AUTO_START, 4000, None).unpack()[0]
+    properties = bus.call_sync(owner, EARPORT_PATH, 'org.freedesktop.DBus.Properties',
+        'GetAll', GLib.Variant('(s)', (EARPORT_IFACE,)), None,
+        Gio.DBusCallFlags.NO_AUTO_START, 4000, None).unpack()[0]
+    address = properties.get('DeviceAddress', '')
+    if isinstance(address, GLib.Variant):
+        address = address.unpack()
+    if not isinstance(address, str) or address.upper() != device['mac'].upper():
+        raise RuntimeError('The headset service changed. Refresh before sending another command.')
+    result = bus.call_sync(owner, EARPORT_PATH, EARPORT_IFACE, method, params,
+                          None, Gio.DBusCallFlags.NO_AUTO_START, 4000, None)
     return result.unpack() if result else ()
 
 
-def engine_setting(key, enabled):
+def engine_setting(key, enabled, device):
     methods = {'auto_connect': 'SetAutoConnect', 'apple_handoff': 'SetAppleHandoff', 'ear_pause_mode': 'SetEarPauseMode'}
     if key not in methods:
         raise ValueError('Unknown headset setting')
-    engine_call(methods[key], GLib.Variant('(i)', (int(enabled),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(enabled),)))
+    engine_call(methods[key], GLib.Variant('(i)', (int(enabled),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(enabled),)), device=device)
 
 
 def set_noise_control(device, mode):
@@ -192,7 +207,7 @@ def set_noise_control(device, mode):
         raise ValueError('Invalid noise-control request')
     state = protocol_state(device)
     if state.get('backend') == 'earport':
-        engine_call('SetNoiseControlMode', GLib.Variant('(s)', (mode,)))
+        engine_call('SetNoiseControlMode', GLib.Variant('(s)', (mode,)), device=device)
         return dict(state, noise_pending=mode)
     runtime = os.environ.get('XDG_RUNTIME_DIR')
     if not runtime:
@@ -318,6 +333,8 @@ def migrate_legacy(config, model_override=None):
     previous = service_state(device)
     enabled = previous.get('UnitFileState') == 'enabled'
     active = previous.get('ActiveState') in ('active', 'activating')
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (CONFIG_DIR / 'backups').mkdir(exist_ok=True, mode=0o700)
     backup = CONFIG_DIR / 'backups' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     backup.mkdir(parents=True, mode=0o700)
     shutil.copy2(old, backup / old.name)
@@ -368,110 +385,8 @@ def migrate_legacy(config, model_override=None):
 
 
 def restore_cli(config):
-    """Restore the original CLI unit, with rollback of all GUI service states."""
-    import shutil
-    import shlex
-    devices = list(config.get('devices', []))
-    if not devices:
-        raise RuntimeError('Set up a headset before transitioning to the CLI version.')
-    old = Path.home() / '.config/systemd/user/airpods-handoff.service'
-    if old.exists() or old.is_symlink():
-        raise RuntimeError('A CLI service already exists. It was kept unchanged.')
-    backup_path = config.get('migration_backup')
-    if backup_path:
-        backup = Path(backup_path).resolve()
-        allowed = (CONFIG_DIR / 'backups').resolve()
-        if not backup.is_relative_to(allowed) or backup == allowed:
-            raise RuntimeError('The original service backup is outside the Handoff backup folder.')
-        source = backup / old.name
-        if source.is_symlink() or not source.is_file():
-            raise RuntimeError('The original service backup is missing. Your GUI service has been kept.')
-        text = source.read_text()
-        state = json.loads((backup / 'state.json').read_text())
-        match = re.search(r'^ExecStart=(.*)$', text, re.M)
-        args = shlex.split(match[1]) if match else []
-        if len(args) != 2 or not valid_mac(args[1]) or args[1].upper() != state.get('mac') or not Path(args[0]).is_absolute():
-            raise RuntimeError('The backup does not contain the expected original Handoff command.')
-        if not os.path.isfile(args[0]) or not os.access(args[0], os.X_OK):
-            raise RuntimeError('The original CLI executable is no longer available. Restore its original installation before trying again.')
-        selected = next((d for d in devices if d['mac'] == state['mac']), None)
-        if selected is None:
-            raise RuntimeError('The backed-up headset is no longer in your profiles. Add it again before restoring.')
-    else:
-        selected = next((d for d in devices if d['mac'] == config.get('selected')), devices[0])
-        if not os.path.isfile(DAEMON):
-            raise RuntimeError('The command-line audio engine is missing.')
-        text = f'''[Unit]
-Description={BY_KEY[selected['model']].name} Linux-Apple Handoff
-After=bluetooth.target
-
-[Service]
-Type=simple
-ExecStart="{DAEMON}" {selected['mac']}
-Restart=on-failure
-RestartSec=4
-
-[Install]
-WantedBy=default.target
-'''
-        current = service_state(selected)
-        state = dict(mac=selected['mac'], enabled=current.get('UnitFileState') == 'enabled', active=current.get('ActiveState') in ('active', 'activating'))
-    snapshots = [(dict(d), service_state(d)) for d in devices]
-    wrote = False
-    try:
-        for d, _ in snapshots:
-            service_action(d, 'stop')
-            service_action(d, 'disable')
-        old.parent.mkdir(parents=True, exist_ok=True)
-        # Refuse to overwrite a service created by another process during transition.
-        with old.open('x') as f:
-            f.write(text)
-        wrote = True
-        run(['systemctl', '--user', 'daemon-reload'])
-        if state.get('enabled'):
-            run(['systemctl', '--user', 'enable', 'airpods-handoff.service'])
-        if state.get('active'):
-            run(['systemctl', '--user', 'start', 'airpods-handoff.service'])
-            legacy = dict(selected, legacy=True)
-            if service_state(legacy).get('ActiveState') not in ('active', 'activating'):
-                raise RuntimeError('The restored CLI service did not start.')
-        updated = dict(config, cli_mode=True, selected=selected['mac'])
-        save_config(updated)
-        config.clear()
-        config.update(updated)
-        return selected
-    except Exception as exc:
-        failures = []
-        if wrote:
-            try:
-                run(['systemctl', '--user', 'disable', '--now', 'airpods-handoff.service'])
-                old.unlink()
-                run(['systemctl', '--user', 'daemon-reload'])
-            except Exception as error:
-                failures.append(str(error))
-        for d, before in snapshots:
-            try:
-                if before.get('UnitFileState') == 'enabled':
-                    service_action(d, 'enable')
-                    if before.get('ActiveState') not in ('active', 'activating'):
-                        service_action(d, 'stop')
-                elif before.get('ActiveState') in ('active', 'activating'):
-                    service_action(d, 'start')
-            except Exception as error:
-                failures.append(str(error))
-        suffix = ' The GUI services were restored.' if not failures else ' Rollback needs attention: ' + '; '.join(failures)
-        raise RuntimeError('CLI transition failed: ' + str(exc) + suffix) from exc
-
-
-EXTENSION_UUID = 'handoff-vibe@asensado.github.io'
-
-def extension_call(method, params=None):
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-    try:
-        result = bus.call_sync('org.gnome.Shell.Extensions', '/org/gnome/Shell/Extensions', 'org.gnome.Shell.Extensions', method, params, None, Gio.DBusCallFlags.NONE, 8000, None)
-        return result.unpack()
-    except GLib.Error as exc:
-        raise RuntimeError('GNOME top-bar status needs GNOME Shell 48. After installing the update, sign out and back in once so GNOME discovers the extension, then enable it here. ' + str(exc)) from exc
+    """Compatibility error for callers of the retired export API; no side effects."""
+    raise RuntimeError('CLI transfer has been retired. Handoff Vibe no longer creates or restores CLI services; existing migration backups are preserved.')
 
 
 def extension_enabled():

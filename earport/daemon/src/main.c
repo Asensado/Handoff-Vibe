@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ * SPDX-FileCopyrightText: 2026 Asensado
  *
  * EarPort Daemon - AirPods integration for Linux
  */
@@ -24,6 +25,7 @@
 #include "controls.h"
 #include "dbus_service.h"
 #include "handoff.h"
+#include "../../../native/process_guard.h"
 #include "link_trace.h"
 #include "device.h"
 #include "hd_mic.h"
@@ -148,6 +150,10 @@ static void on_case_battery(int level, bool charging, void *user_data)
 static void on_playback_started(void *user_data)
 {
     (void)user_data;
+    /* Remote calls outrank automatic local playback, including Tipi claims. */
+    if (g_strcmp0(app.state.audio_source, "other") == 0 &&
+        app.device.audio_source_type == AAP_AUDIO_SOURCE_CALL)
+        return;
     autoconnect_on_playback_started(app.autoconnect);
     tipi_playback_started(app.tipi);
     handoff_playback_started(app.handoff);
@@ -346,6 +352,16 @@ static void on_link_packet(const AapParsedPacket *pkt, void *user_data)
                                pkt->data.audio_source.type == AAP_AUDIO_SOURCE_CALL);
         tipi_source_changed(app.tipi, app.state.audio_source);
     }
+}
+
+static void on_link_resynchronized(void *user_data)
+{
+    (void)user_data;
+    /* A reopened channel has no confirmed owner until fresh telemetry. */
+    handoff_source_changed(app.handoff, NULL, false);
+    tipi_source_changed(app.tipi, NULL);
+    app.state.audio_source = NULL;
+    dbus_service_emit_properties_changed(app.dbus_service, "AudioSource");
 }
 
 static void on_link_disconnected(void *user_data)
@@ -683,6 +699,12 @@ static void handoff_resume_players(void *user_data)
     media_control_resume_handoff(app.media_control);
 }
 
+static void handoff_cancel_audio(void *user_data)
+{
+    (void)user_data;
+    audio_route_cancel();
+}
+
 static void handoff_restart_audio(HandoffRestart how, void *user_data)
 {
     (void)user_data;
@@ -762,6 +784,7 @@ static gboolean on_sigterm(gpointer user_data)
 
 static void cleanup(void)
 {
+    audio_route_shutdown();
     app.stopping = true;
     g_message("Cleaning up...");
 
@@ -831,6 +854,10 @@ int main(int argc, char *argv[])
                argv[0]);
         return strcmp(argv[1], "--help") == 0 ? 0 : 1;
     }
+
+    int process_guard = handoff_process_guard();
+    if (process_guard < 0)
+        return 5;
 
     g_message("EarPort Daemon %s starting...", EARPORT_VERSION);
 
@@ -902,6 +929,7 @@ int main(int argc, char *argv[])
         .pause_players = handoff_pause_players,
         .resume_players = handoff_resume_players,
         .restart_audio = handoff_restart_audio,
+        .cancel_audio = handoff_cancel_audio,
     };
     app.handoff = handoff_new(&handoff_callbacks, NULL);
     app.link_trace = link_trace_new();
@@ -928,6 +956,7 @@ int main(int argc, char *argv[])
         .connected = on_link_connected,
         .disconnected = on_link_disconnected,
         .packet = on_link_packet,
+        .resynchronized = on_link_resynchronized,
     };
     app.link = aap_link_new(&link_callbacks, NULL);
     controls_init(&app.controls, &app.device, app.link, app.dbus_service);

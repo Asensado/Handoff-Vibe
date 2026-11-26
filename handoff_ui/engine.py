@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Asensado
 """Handoff service supervisor for its separately licensed Earport backend."""
-import fcntl
 import json
+from contextlib import ExitStack, suppress
 import os
 from pathlib import Path
 import signal
 import subprocess
+from .lifecycle import acquire_lease, stop_backend
+from .settings import normalize_settings
 import sys
 import tempfile
 import time
@@ -52,12 +54,17 @@ def main():
         return 3
     folder = Path(runtime) / 'handoff'
     folder.mkdir(mode=0o700, exist_ok=True)
-    lock = (folder / (compact + '.lock')).open('w')
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print('Another Handoff engine manages this headset', file=sys.stderr)
-        return 4
+    with ExitStack() as leases:
+        try:
+            lock = leases.enter_context(acquire_lease(folder, compact + '.lock'))
+            backend_lock = leases.enter_context(acquire_lease(folder, 'engine.lock'))
+        except BlockingIOError:
+            print('Another Handoff engine already manages the Bluetooth backend', file=sys.stderr)
+            return 4
+        return run_engine(compact, folder, lock, backend_lock)
+
+
+def run_engine(compact, folder, lock, backend_lock):
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     existing = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
                             'NameHasOwner', GLib.Variant('(s)', (BUS,)), None,
@@ -67,7 +74,7 @@ def main():
         return 5
     root = Path(__file__).resolve().parent.parent
     executable = '/usr/libexec/handoff/earport-daemon' if root == Path('/usr/share/handoff') else str(root / 'earport/daemon/build/earport-daemon')
-    env = dict(os.environ, HANDOFF_DEVICE_ADDRESS=':'.join(compact[i:i+2] for i in range(0, 12, 2)))
+    env = dict(os.environ, HANDOFF_SUPERVISOR_PID=str(os.getpid()), HANDOFF_DEVICE_ADDRESS=':'.join(compact[i:i+2] for i in range(0, 12, 2)))
     config_home = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
     env['XDG_CONFIG_HOME'] = str(config_home / 'handoff/engine-config')
     # Some desktop users cannot read journald. Keep a private bounded runtime
@@ -76,10 +83,15 @@ def main():
     if log_path.exists():
         log_path.replace(folder / (compact + '.previous.log'))
     log = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_APPEND, 0o600), 'w')
-    child = subprocess.Popen([executable], env=env, stdout=log, stderr=subprocess.STDOUT)
+    child = subprocess.Popen([executable], env=env, stdout=log, stderr=subprocess.STDOUT,
+                             start_new_session=True, pass_fds=(lock.fileno(), backend_lock.fileno()))
     loop = GLib.MainLoop()
     configured = False
     result = 0
+    last_response = time.monotonic()
+    backend_owner = None
+    refreshing = False
+    stopping = False
     previous_owner = ''
     switching_until = 0
 
@@ -93,8 +105,8 @@ def main():
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def tick():
-        nonlocal configured, result, previous_owner, switching_until
+    def refresh():
+        nonlocal configured, result, previous_owner, switching_until, last_response, backend_owner
         if os.fstat(log.fileno()).st_size > 2 * 1024 * 1024:
             os.ftruncate(log.fileno(), 0)
         if child.poll() is not None:
@@ -103,7 +115,24 @@ def main():
             loop.quit()
             return False
         try:
-            properties = bus.call_sync(BUS, PATH, 'org.freedesktop.DBus.Properties', 'GetAll',
+            owner_name = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', 'GetNameOwner', GLib.Variant('(s)', (BUS,)),
+                None, Gio.DBusCallFlags.NONE, 1500, None).unpack()[0]
+            pid = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', 'GetConnectionUnixProcessID', GLib.Variant('(s)', (owner_name,)),
+                None, Gio.DBusCallFlags.NONE, 1500, None).unpack()[0]
+            if pid != child.pid:
+                result = 5
+                loop.quit()
+                save(dict(updated=time.time(), ready=False, backend='earport',
+                          error='Another process owns the Bluetooth control service.'))
+                return False
+            if backend_owner != owner_name:
+                configured = False
+                previous_owner = ''
+                switching_until = 0
+                backend_owner = owner_name
+            properties = bus.call_sync(owner_name, PATH, 'org.freedesktop.DBus.Properties', 'GetAll',
                                       GLib.Variant('(s)', (INTERFACE,)), None,
                                       Gio.DBusCallFlags.NO_AUTO_START, 1500, None).unpack()[0]
             if not configured:
@@ -113,12 +142,13 @@ def main():
                     settings = {}
                 # Switching is Handoff's core function. The Start/Pause service
                 # action is its single user-facing control.
-                settings['apple_handoff'] = True
+                settings = normalize_settings(settings)
                 for key, method in [('auto_connect', 'SetAutoConnect'), ('apple_handoff', 'SetAppleHandoff'), ('ear_pause_mode', 'SetEarPauseMode')]:
                     if key in settings:
-                        bus.call_sync(BUS, PATH, INTERFACE, method, (GLib.Variant('(i)', (int(settings[key]),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(settings[key]),))),
+                        bus.call_sync(owner_name, PATH, INTERFACE, method, (GLib.Variant('(i)', (int(settings[key]),)) if key == 'ear_pause_mode' else GLib.Variant('(b)', (bool(settings[key]),))),
                                       None, Gio.DBusCallFlags.NO_AUTO_START, 2000, None)
                 configured = True
+            last_response = time.monotonic()
             state = snapshot(properties)
             owner = state['owner']
             if previous_owner in ('linux', 'other') and owner in ('linux', 'other') and owner != previous_owner:
@@ -129,30 +159,67 @@ def main():
             state['switching'] = state['switching'] or switching_until > time.time()
             save(state)
         except GLib.Error:
+            configured = False
+            previous_owner = ''
+            switching_until = 0
+            if time.monotonic() - last_response > 20:
+                result = 1
+                loop.quit()
+                save(dict(updated=time.time(), ready=False, backend='earport',
+                          error='Bluetooth backend stopped responding; restarting the service.'))
+                return False
             save(dict(updated=time.time(), ready=False, backend='earport', error='Waiting for the Bluetooth backend.'))
         return True
 
+    def tick():
+        nonlocal refreshing, result, stopping
+        if refreshing:
+            return True
+        refreshing = True
+        try:
+            return refresh()
+        except Exception as error:
+            # No GLib callback is allowed to silently abandon supervision.
+            result = 1
+            stopping = True
+            print('Handoff supervision failed: ' + str(error), file=sys.stderr)
+            loop.quit()
+            return False
+        finally:
+            refreshing = False
+
     def stop(*_):
+        nonlocal stopping
+        stopping = True
         loop.quit()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    GLib.timeout_add_seconds(2, tick)
-    # Publish transitions immediately; a short switch can be missed by polling.
-    subscription = bus.signal_subscribe(BUS, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
-                                        PATH, None, Gio.DBusSignalFlags.NONE, lambda *_: tick())
+    timer = None
+    subscription = None
     try:
-        if tick():
+        timer = GLib.timeout_add_seconds(2, tick)
+        # Publish transitions immediately, but never recursively run the refresh.
+        subscription = bus.signal_subscribe(BUS, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
+                                            PATH, None, Gio.DBusSignalFlags.NONE, lambda *_: tick())
+        if tick() and not stopping:
             loop.run()
     finally:
-        bus.signal_unsubscribe(subscription)
-        child.terminate()
+        if timer is not None:
+            with suppress(Exception):
+                if GLib.MainContext.default().find_source_by_id(timer):
+                    GLib.source_remove(timer)
+        if subscription is not None:
+            with suppress(Exception):
+                bus.signal_unsubscribe(subscription)
         try:
-            child.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait()
-        log.close()
-        save(dict(updated=time.time(), ready=False, backend='earport', error=''))
+            stop_backend(child)
+        finally:
+            log.close()
+        try:
+            save(dict(updated=time.time(), ready=False, backend='earport',
+                      error='' if result == 0 else 'Bluetooth backend failed; see Advanced logs.'))
+        except OSError as error:
+            print('Could not write final Handoff status: ' + str(error), file=sys.stderr)
     return result
 
 

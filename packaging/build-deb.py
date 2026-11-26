@@ -35,7 +35,7 @@ shutil.copy2(ROOT / 'packaging/update-handoff', STAGE / 'usr/libexec/handoff/upd
 service_dir = STAGE / 'usr/lib/systemd/system'
 service_dir.mkdir(parents=True, exist_ok=True)
 shutil.copy2(ROOT / 'packaging/handoff-vibe-update.service', service_dir)
-for folder in ['earport', 'LICENSES']:
+for folder in ['earport', 'native', 'LICENSES']:
     shutil.copytree(ROOT / folder, STAGE / 'usr/share/doc/handoff-vibe' / folder,
                     ignore=shutil.ignore_patterns('build', 'build-*', '__pycache__'))
 shutil.copy2(ROOT / 'packaging/prepare-bluetooth', STAGE / 'usr/libexec/handoff/prepare-bluetooth')
@@ -72,7 +72,7 @@ Description: Handoff Vibe graphical setup and status for AirPods and Beats
  audio switching status, background service controls, and diagnostic logs.
  Based on xatuke/handoff. Compatible hardware is required.
 ''')
-(STAGE / 'DEBIAN/postinst').write_text('#!/bin/sh\nset -e\nsystemctl daemon-reload 2>/dev/null || true\n')
+(STAGE / 'DEBIAN/postinst').write_text('#!/bin/sh\nset -e\n# Retire unsigned root updates, including opt-ins from older builds.\nrm -f /etc/apt/apt.conf.d/99handoff-vibe-updates /etc/handoff/automatic-updates\nsystemctl daemon-reload 2>/dev/null || true\n')
 (STAGE / 'DEBIAN/postrm').write_text('#!/bin/sh\nset -e\nif [ "$1" = remove ] || [ "$1" = purge ]; then\n  rm -f /etc/apt/apt.conf.d/99handoff-vibe-updates /etc/handoff/automatic-updates\nfi\nsystemctl daemon-reload 2>/dev/null || true\n')
 (STAGE / 'DEBIAN/postinst').chmod(0o755)
 (STAGE / 'DEBIAN/postrm').chmod(0o755)

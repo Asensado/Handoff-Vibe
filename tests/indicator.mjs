@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 // Load the pure ES module independently of GNOME Shell for deterministic checks.
 const code = fs.readFileSync(new URL('../gnome-extension/state.js', import.meta.url), 'utf8');
-const {statusFor, protocolFromProperties, unpack} = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+const {statusFor, protocolFromProperties, unpack, commandMatches} = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 const config = {selected:'AA:BB:CC:DD:EE:FF'};
 const ready = {updated:990,ready:true};
 assert.equal(statusFor(config,'active',ready,1000)[0],'Active');
@@ -34,4 +34,8 @@ assert.equal(protocolFromProperties({...config,cli_mode:true},{},1000),null);
 assert.equal(statusFor(config,'active',protocolFromProperties(config,{Connected:false},1000),1000)[0],'Disconnected');
 assert.deepEqual(unpack({deepUnpack:()=>[{deepUnpack:()=> 'active'}]}),['active']);
 assert.deepEqual(unpack({NearbyBattery:{deepUnpack:()=>({Left:{deepUnpack:()=>78}})}}),{NearbyBattery:{Left:78}});
-console.log('25 indicator and live D-Bus state checks passed.');
+assert.equal(commandMatches(config, {DeviceAddress: config.selected.toLowerCase()}), true);
+assert.equal(commandMatches(config, {DeviceAddress: '11:22:33:44:55:66'}), false);
+assert.equal(commandMatches(config, {DeviceAddress: ''}), false);
+assert.equal(commandMatches({...config,cli_mode:true}, {DeviceAddress:config.selected}), false);
+console.log('29 indicator and live D-Bus state checks passed.');

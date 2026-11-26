@@ -1,76 +1,29 @@
-#!/usr/bin/python3
-"""Opt-in, fixed-repository update installer. No caller-provided URLs or paths."""
-import json
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Asensado
+"""Retire the unsigned privileged updater; no network or installer operations."""
 import os
 from pathlib import Path
-import subprocess
 import sys
-import tempfile
-import time
-
-sys.path.insert(0, '/usr/share/handoff')
-from handoff_ui.releases import fetch_releases, update_asset, download_asset, version_tuple
 
 MARKER = Path('/etc/handoff/automatic-updates')
 HOOK = Path('/etc/apt/apt.conf.d/99handoff-vibe-updates')
-
-
-def run_update():
-    installed = subprocess.check_output(['dpkg-query', '-W', '-f=${Version}', 'handoff-vibe'], text=True).strip()
-    releases = fetch_releases()
-    if not releases or not version_tuple(installed):
-        return 'No compatible stable update is available.'
-    newest = releases[0]
-    if version_tuple(newest['version']) <= version_tuple(installed):
-        return 'Handoff Vibe is up to date.'
-    arch = subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip()
-    asset = update_asset(newest, arch)
-    with tempfile.TemporaryDirectory(prefix='handoff-update-') as folder:
-        package = Path(folder) / asset['name']
-        download_asset(asset, package)
-        expected = {'Package': 'handoff-vibe', 'Version': newest['version'], 'Architecture': arch}
-        for field, value in expected.items():
-            actual = subprocess.check_output(['dpkg-deb', '--field', str(package), field], text=True).strip()
-            if actual != value:
-                raise ValueError('The release package metadata did not match the expected Handoff build')
-        # APT may still hold its lock when the post-update hook schedules us.
-        subprocess.run(['apt-get', '-o', 'Dpkg::Lock::Timeout=180', '--no-remove', '-y', 'install', str(package)],
-                       check=True, env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), timeout=600)
-    return 'Installed Handoff Vibe ' + newest['version'] + '. Restart Handoff to use the update.'
+DISABLED = ('Automatic and in-app installation are disabled until independently '
+            'authenticated release signing is available. Review releases and install manually.')
 
 
 def main():
     if os.geteuid() != 0:
         raise SystemExit('Administrator authentication is required.')
     if len(sys.argv) != 2 or sys.argv[1] not in ('enable', 'disable', 'run', 'run-automatic'):
-        raise SystemExit('Choose enable, disable, or run.')
-    action = sys.argv[1]
-    if action == 'enable':
-        MARKER.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-        MARKER.write_text('Enabled by the user in Handoff settings.\n')
-        MARKER.chmod(0o644)
-        HOOK.write_text('APT::Update::Post-Invoke { "if test -f /etc/handoff/automatic-updates; then /usr/bin/systemctl start --no-block handoff-vibe-update.service >/dev/null 2>&1 || true; fi"; };\n')
-        return
-    if action == 'disable':
+        raise SystemExit('Choose disable. Unsigned privileged installation is unavailable.')
+    if sys.argv[1] == 'disable':
         MARKER.unlink(missing_ok=True)
         HOOK.unlink(missing_ok=True)
+        print('Automatic updates disabled.')
         return
-    if action == 'run-automatic' and not MARKER.exists():
-        print('Automatic updates are disabled.')
-        return
-    try:
-        message = run_update()
-        success = True
-    except Exception as error:
-        message, success = str(error), False
-    folder = Path('/var/lib/handoff')
-    folder.mkdir(parents=True, exist_ok=True, mode=0o755)
-    status = folder / 'update-status.json'
-    status.write_text(json.dumps(dict(updated=time.time(), ok=success, message=message)))
-    status.chmod(0o644)
-    print(message)
-    if not success:
-        raise SystemExit(1)
+    # Fail closed even if a stale marker/hook survives or the service is started directly.
+    raise SystemExit(DISABLED)
 
 
 if __name__ == '__main__':

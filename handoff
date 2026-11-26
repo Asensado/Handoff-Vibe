@@ -1,5 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 import sys
+import os
+if os.geteuid() == 0:
+    raise SystemExit("Run Handoff as your regular desktop user, without sudo.")
 from pathlib import Path
 root = Path(__file__).resolve().parent
 sys.path.insert(0, str(root if (root / 'handoff_ui').exists() else Path('/usr/share/handoff')))

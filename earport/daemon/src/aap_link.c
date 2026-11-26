@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  * SPDX-FileCopyrightText: 2024 EarPort Contributors
+ * SPDX-FileCopyrightText: 2026 Asensado
  */
 
 #include "aap_link.h"
@@ -15,6 +16,9 @@
 /* L2CAP reconnection: AirPods frequently refuse the first L2CAP connect
  * right after the BlueZ link comes up, so retry with exponential backoff. */
 #define RECONNECT_MAX_ATTEMPTS 5
+#ifndef RECONNECT_COOLDOWN_MS
+#define RECONNECT_COOLDOWN_MS 60000
+#endif
 #ifndef RECONNECT_BASE_DELAY_MS
 #define RECONNECT_BASE_DELAY_MS 2000
 #endif
@@ -77,6 +81,7 @@ struct AapLink {
 
     guint reconnect_timeout_id;
     int reconnect_attempts;
+    bool reconnect_cooldown;
 
     /* Notification request retries (until the first battery packet) */
     guint notif_retry_timeout_id;
@@ -167,6 +172,11 @@ static gboolean reconnect_timeout_cb(gpointer user_data)
     g_message("L2CAP reconnect attempt %d/%d to %s",
               link->reconnect_attempts, RECONNECT_MAX_ATTEMPTS, link->address);
 
+    if (link->reconnect_cooldown) {
+        link->reconnect_cooldown = false;
+        link->reconnect_attempts = 0;
+    }
+
     /* On failure, the BT_STATE_ERROR callback schedules the next attempt */
     connect_link(link);
 
@@ -182,7 +192,10 @@ static void schedule_reconnect(AapLink *link)
         return;
 
     if (link->reconnect_attempts >= RECONNECT_MAX_ATTEMPTS) {
-        g_warning("Giving up L2CAP reconnection after %d attempts", link->reconnect_attempts);
+        g_warning("L2CAP retry budget exhausted; cooling down before a control-channel probe");
+        link->reconnect_cooldown = true;
+        link->reconnect_timeout_id = g_timeout_add(RECONNECT_COOLDOWN_MS,
+                                                    reconnect_timeout_cb, link);
         return;
     }
 
@@ -197,11 +210,11 @@ static void schedule_reconnect(AapLink *link)
 
 static void cancel_reconnect(AapLink *link)
 {
+    link->reconnect_cooldown = false;
     if (link->reconnect_timeout_id > 0) {
         g_source_remove(link->reconnect_timeout_id);
         link->reconnect_timeout_id = 0;
     }
-    link->reconnect_attempts = 0;
 }
 
 /* ============================================================================
@@ -376,6 +389,7 @@ static void on_bt_data_received(const uint8_t *data, size_t len, void *user_data
     }
 
     if (packet.type == AAP_PKT_TYPE_BATTERY) {
+        link->reconnect_attempts = 0;
         link->battery_received = true;
         cancel_notif_retry(link);
     }
@@ -414,6 +428,8 @@ static void on_bt_state_changed(BluetoothState state, const char *error, void *u
             /* Clients never saw the link go down: keep the current state
              * and don't announce a new connection. */
             link->silent_reconnect = false;
+            if (link->callbacks.resynchronized)
+                link->callbacks.resynchronized(link->user_data);
             g_message("AirPods link re-opened");
             break;
         }
@@ -518,8 +534,12 @@ void aap_link_free(AapLink *link)
 
 void aap_link_device_connected(AapLink *link, const char *address, const char *name)
 {
+    /* Repeated BlueZ signals are not new sessions or retry budgets. */
+    if (link->bluez_connected && g_strcmp0(address, link->address) == 0)
+        return;
+    if (!link->bluez_connected)
+        link->reconnect_attempts = 0;
     link->bluez_connected = true;
-    link->reconnect_attempts = 0;
     link->silent_reconnect_done = false;
 
     if (aap_link_is_connected(link)) {
@@ -542,6 +562,14 @@ void aap_link_device_disconnected(AapLink *link)
 {
     link->bluez_connected = false;
     cancel_reconnect(link);
+    if (link->silent_reconnect_id) {
+        g_source_remove(link->silent_reconnect_id);
+        link->silent_reconnect_id = 0;
+    }
+    if (link->keys_request_id) {
+        g_source_remove(link->keys_request_id);
+        link->keys_request_id = 0;
+    }
 
     /* The AirPods left during a silent reconnect: clients still think
      * they are connected, so report it now. */

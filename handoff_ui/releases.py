@@ -34,6 +34,14 @@ def release_identity(tag, prerelease=False):
     return base, suffix, channel
 
 
+def is_newer(candidate, installed):
+    new = release_identity(candidate)
+    old = release_identity(installed)
+    if new is None or old is None:
+        return False
+    return new[0] > old[0] or (new[0] == old[0] and new[2] == 'stable' and old[2] != 'stable')
+
+
 def parse_releases(payload, include_prereleases=False):
     if not isinstance(payload, list):
         raise ValueError('GitHub returned an invalid releases response')
