@@ -1,0 +1,69 @@
+name: Windows beta
+on:
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows-beta.yml'
+  push:
+    branches: ['windows/**']
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows-beta.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows 11 x64 build and smoke tests
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compile and test
+        shell: pwsh
+        run: |
+          cmake -S windows -B build/windows -A x64
+          cmake --build build/windows --config Release
+          ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Launch the window and measure memory
+        shell: pwsh
+        run: |
+          $app = Start-Process (Resolve-Path build/windows/Release/handoff-vibe.exe) -PassThru
+          try {
+            if (!$app.WaitForInputIdle(10000)) { throw "Window did not become ready" }
+            for ($attempt = 0; $attempt -lt 20; $attempt++) {
+              $app.Refresh()
+              if ($app.HasExited) { throw "App exited during startup" }
+              if ($app.MainWindowHandle -ne 0) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($app.MainWindowTitle -ne 'Handoff Vibe') { throw "Handoff Vibe window was not created" }
+            $working = [Math]::Round($app.WorkingSet64 / 1MB, 1)
+            $private = [Math]::Round($app.PrivateMemorySize64 / 1MB, 1)
+            "Idle GUI: working set $working MiB, private memory $private MiB" |
+              Tee-Object -FilePath windows-smoke.txt
+            if ($app.WorkingSet64 -ge 500000000 -or $app.PrivateMemorySize64 -ge 500000000) {
+              throw "Idle GUI exceeded the 500 MB target"
+            }
+            if (!$app.CloseMainWindow() -or !$app.WaitForExit(5000) -or $app.ExitCode -ne 0) {
+              throw "App failed to close cleanly"
+            }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id }
+          }
+      - name: Assemble portable beta
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path beta
+          Copy-Item build/windows/Release/handoff-vibe*.exe,windows/README.md,windows-smoke.txt,LICENSE beta
+          Get-ChildItem beta/*.exe | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content beta/SHA256SUMS -Encoding ascii
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: handoff-vibe-windows-x64-beta.1
+          path: beta/
+          if-no-files-found: error
