@@ -82,6 +82,8 @@ def test_logs():
     app.demo = True
     app.logs_window.close()
     app.preferences()
+    assert all(not item.get_sensitive() and not control.get_active()
+               for item, control in app.unavailable_features)
     from handoff_ui import releases as R
     from unittest.mock import patch
     with patch('handoff_ui.app.__version__', '0.2.0-PRE.2'):

@@ -698,19 +698,16 @@ class Handoff(Adw.Application):
         win.add(page)
         connection = Adw.PreferencesGroup(title='Headset connection')
         page.add(connection)
-        for key, title, description in [
-            ('auto_connect', 'Automatic connection', 'Connect when worn or when computer playback starts. Do not take audio from another device playing music or in a call.'),
+        self.unavailable_features = []
+        for title, description in [
+            ('Automatic connection', 'Unavailable in 0.2.1 while connection behavior is validated. Tracked in GitHub issue #17.'),
+            ('Proximity card', 'Unavailable. A battery notification with a Connect button is planned in GitHub issue #1.'),
         ]:
-            item, _ = switch_row(title, description, self.config.get(key, False),
-                                  lambda active, setting=key: self.change_engine_setting(setting, active))
+            item, control = switch_row(title, description, False, lambda _: None)
+            item.set_sensitive(False)
+            item.set_tooltip_text(description)
+            self.unavailable_features.append((item, control))
             connection.add(item)
-        try:
-            proximity_enabled = B.proximity_enabled()
-        except Exception:
-            proximity_enabled = True
-        item, _ = switch_row('Proximity card', 'Show nearby case batteries and a Connect button. Requires the GNOME companion and a previously connected supported headset.',
-                             proximity_enabled, lambda enabled: None if self.demo else self.job(lambda: B.set_proximity_enabled(enabled)))
-        connection.add(item)
         ear = Adw.ComboRow(title='Pause Linux audio when taking earbuds out', subtitle='Controls media players on this computer only. iPhone playback follows its own Automatic Ear Detection setting.', model=Gtk.StringList.new(['Never', 'Either earbud', 'Both earbuds']))
         ear.set_selected(self.config.get('ear_pause_mode', 1))
         ear.connect('notify::selected', lambda choice, _: self.change_engine_setting('ear_pause_mode', choice.get_selected()))

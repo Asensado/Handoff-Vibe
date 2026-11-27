@@ -71,8 +71,8 @@ First-generation AirPods, Studio Buds/Studio Buds +, Studio Pro/Studio3, Solo Bu
 - Noise cancellation, Transparency and Off controls through the same headset connection, including while another device owns audio. Adaptive is shown in the GNOME menu when supported.
 - Left/right/case batteries and a listening-time estimate learned from your own discharge sessions. Unavailable readings are omitted.
 - Ear-detection pause/resume, with Never / Either earbud / Both earbuds settings.
-- Optional **Automatic connection**, which checks nearby activity before connecting and avoids taking a headset from another device playing audio or in a call.
-- Optional **proximity card** with batteries and a Connect button. This needs a previous connection, usable Bluetooth LE broadcasts and the GNOME companion.
+- **Automatic connection is unavailable for 0.2.1**, pending hardware validation ([#17](https://github.com/Asensado/Handoff-Vibe/issues/17)). Its preference is greyed out.
+- **Proximity card is unavailable**. A battery notification with a Connect button is planned ([#1](https://github.com/Asensado/Handoff-Vibe/issues/1)); its preference is greyed out.
 - Guided pairing, safe import of an existing installation and profile management. CLI export/restore is retired; migration backups remain available.
 - **What's new?** in the dotted menu, with Stable, Beta and Experimental release badges and read-only update notifications.
 - Advanced logs and an offline daily Bible verse.
@@ -83,7 +83,7 @@ First-generation AirPods, Studio Buds/Studio Buds +, Studio Pro/Studio3, Solo Bu
 
 The top bar shows **Active**, **Switching**, **Handoff** when another device owns audio, **Disconnected**, or **Paused**. A service failure still shows Error.
 
-Automatic connection is separate from switching: it controls when an otherwise disconnected headset connects to the computer. Proximity cards can take a few seconds to appear, and a silent closed case cannot supply fresh battery readings.
+Normal handoff between connected hosts remains available. Optional automatic connection and proximity cards are disabled while their tracked work is unfinished. Ear-removal pause preferences control Linux media players; iPhone playback follows its own ear-detection setting.
 
 ## Help and updates
 

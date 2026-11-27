@@ -92,6 +92,7 @@ class SecurityReview(unittest.TestCase):
             self.assertIs(settings['auto_connect'], False)
             self.assertEqual(settings['ear_pause_mode'], 1)
         self.assertEqual(normalize_settings({'ear_pause_mode': 0})['ear_pause_mode'], 0)
+        self.assertIs(normalize_settings({'auto_connect': True})['auto_connect'], False)
 
     def test_bad_nested_profile_does_not_crash_gui_config_load(self):
         with tempfile.TemporaryDirectory() as directory:
