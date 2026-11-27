@@ -17,6 +17,15 @@ class HTTPSOnly(HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, message, headers, url)
 
 
+def notes_text(body):
+    """Readable plain text from release Markdown; never enable label markup."""
+    text = re.sub(r'^#{1,6}\s+', '', str(body), flags=re.MULTILINE)
+    text = re.sub(r'!\[([^]\n]*)\]\([^\n)]*\)', r'\1', text)
+    text = re.sub(r'\[([^]\n]+)\]\((https?://[^\s)]+)\)', r'\1 (\2)', text)
+    text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
+    return text.replace('**', '').replace('`', '').strip()
+
+
 def version_tuple(tag):
     match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(tag))
     return tuple(map(int, match.groups())) if match else None

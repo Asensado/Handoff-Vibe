@@ -665,7 +665,7 @@ class Handoff(Adw.Application):
             date = label(' · '.join(part for part in [release['tag'], release['date']] if part), 'caption dim-label')
             date.set_xalign(0)
             card.append(date)
-            description = label(release['body'])
+            description = label(R.notes_text(release['body']))
             description.set_xalign(0)
             description.set_justify(Gtk.Justification.LEFT)
             description.set_selectable(True)

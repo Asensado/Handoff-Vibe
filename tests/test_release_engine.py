@@ -46,6 +46,10 @@ class Releases(unittest.TestCase):
         self.assertEqual(len(R.parse_releases([self.release(tag_name=tag) for tag in tags])), 1)
         self.assertTrue(R.is_newer('0.3.0', '0.3.0-rc.2'))
 
+    def test_notes_are_readable_plain_text_without_enabling_markup(self):
+        body = '## Security\n\n- **Fixed** `owner` checks\n[Details](https://example.com)\n<b>literal</b>'
+        self.assertEqual(R.notes_text(body), 'Security\n\n• Fixed owner checks\nDetails (https://example.com)\n<b>literal</b>')
+
     def test_github_prerelease_flag_without_suffix_is_beta(self):
         result = R.parse_releases([self.release(prerelease=True)], include_prereleases=True)
         self.assertEqual(result[0]['channel'], 'beta')
