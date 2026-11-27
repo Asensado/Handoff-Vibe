@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Asensado
+import ast
 import importlib.machinery
 import importlib.util
 import io
@@ -22,6 +23,27 @@ loader.exec_module(updater)
 
 
 class SecurityReview(unittest.TestCase):
+    def test_ui_backend_references_exist_in_installed_mode(self):
+        tree = ast.parse((ROOT / 'handoff_ui/app.py').read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == 'B':
+                self.assertTrue(hasattr(B, node.attr), node.attr)
+        metadata = json.loads((ROOT / 'gnome-extension/metadata.json').read_text())
+        self.assertEqual(B.EXTENSION_UUID, metadata['uuid'])
+        with patch.object(B, 'INSTALLED', True), patch.object(B, 'extension_call', return_value=({'state': 1},)) as call:
+            self.assertTrue(B.extension_enabled())
+            self.assertEqual(call.call_args.args[1].unpack(), (metadata['uuid'],))
+
+    def test_extension_call_uses_bounded_session_bus_and_reports_errors(self):
+        bus = Mock()
+        bus.call_sync.return_value = B.GLib.Variant('(b)', (True,))
+        with patch.object(B.Gio, 'bus_get_sync', return_value=bus):
+            self.assertEqual(B.extension_call('EnableExtension'), (True,))
+        self.assertEqual(bus.call_sync.call_args.args[-2], 8000)
+        with patch.object(B.Gio, 'bus_get_sync', side_effect=B.GLib.Error('unavailable')):
+            with self.assertRaisesRegex(RuntimeError, 'sign out and back in'):
+                B.extension_call('EnableExtension')
+
     def test_privileged_installer_fails_closed_for_every_install_action(self):
         for action in ('enable', 'run', 'run-automatic'):
             with self.subTest(action=action), patch.object(updater.os, 'geteuid', return_value=0), \

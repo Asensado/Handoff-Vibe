@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 INSTALLED = ROOT == Path('/usr/share/handoff')
 DAEMON = '/usr/libexec/handoff/airpods-handoff' if INSTALLED else str(ROOT / 'build/airpods-handoff')
 HELPER = '/usr/libexec/handoff/prepare-bluetooth'
+EXTENSION_UUID = 'handoff-vibe@asensado.github.io'
 
 
 def run(args, check=True, timeout=15):
@@ -387,6 +388,17 @@ def migrate_legacy(config, model_override=None):
 def restore_cli(config):
     """Compatibility error for callers of the retired export API; no side effects."""
     raise RuntimeError('CLI transfer has been retired. Handoff Vibe no longer creates or restores CLI services; existing migration backups are preserved.')
+
+
+def extension_call(method, params=None):
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        result = bus.call_sync('org.gnome.Shell.Extensions', '/org/gnome/Shell/Extensions',
+            'org.gnome.Shell.Extensions', method, params, None, Gio.DBusCallFlags.NONE, 8000, None)
+        return result.unpack()
+    except GLib.Error as exc:
+        raise RuntimeError('Could not reach GNOME extension settings. After installing an update, '
+            'sign out and back in, then check the Extensions app. ' + str(exc)) from exc
 
 
 def extension_enabled():
