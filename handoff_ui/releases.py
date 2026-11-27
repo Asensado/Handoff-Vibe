@@ -4,6 +4,7 @@
 import hashlib
 import json
 import re
+from . import __version__
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 REPOSITORY = 'https://github.com/Asensado/Handoff-Vibe'
@@ -15,6 +16,15 @@ class HTTPSOnly(HTTPRedirectHandler):
         if not url.startswith('https://'):
             raise ValueError('An update redirected to an insecure address')
         return super().redirect_request(request, fp, code, message, headers, url)
+
+
+def notes_text(body):
+    """Readable plain text from release Markdown; never enable label markup."""
+    text = re.sub(r'^#{1,6}\s+', '', str(body), flags=re.MULTILINE)
+    text = re.sub(r'!\[([^]\n]*)\]\([^\n)]*\)', r'\1', text)
+    text = re.sub(r'\[([^]\n]+)\]\((https?://[^\s)]+)\)', r'\1 (\2)', text)
+    text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
+    return text.replace('**', '').replace('`', '').strip()
 
 
 def version_tuple(tag):
@@ -30,7 +40,10 @@ def release_identity(tag, prerelease=False):
     suffix = match[4] or ''
     channel = 'stable'
     if prerelease or suffix:
-        channel = 'experimental' if re.search(r'(experimental|alpha|dev|nightly|snapshot)', suffix, re.I) else 'beta'
+        if re.search(r'(?:^|[.-])(?:rc\d*|candidate)(?:$|[.-])', suffix, re.I):
+            channel = 'rc'
+        else:
+            channel = 'experimental' if re.search(r'(experimental|alpha|dev|nightly|snapshot)', suffix, re.I) else 'beta'
     return base, suffix, channel
 
 
@@ -74,12 +87,15 @@ def parse_releases(payload, include_prereleases=False):
                              body=str(item.get('body') or 'No release notes were provided.')[:40000],
                              date=str(item.get('published_at') or '')[:10], url=url, assets=assets))
     return sorted(releases, key=lambda release: (
-        release_identity(release['tag'])[0], release['channel'] == 'stable',
-        release.get('date', ''), release['version']), reverse=True)
+        release_identity(release['tag'])[0],
+        {'experimental': 0, 'beta': 1, 'rc': 2, 'stable': 3}[release['channel']],
+        tuple((1, int(part)) if part.isdigit() else (0, part.lower())
+              for part in re.findall(r'[0-9]+|[A-Za-z]+', release_identity(release['tag'])[1])),
+        release.get('date', '')), reverse=True)
 
 
 def fetch_releases(include_prereleases=False):
-    request = Request(API, headers={'User-Agent': 'Handoff-Vibe/0.2.0', 'Accept': 'application/vnd.github+json'})
+    request = Request(API, headers={'User-Agent': 'Handoff-Vibe/' + __version__, 'Accept': 'application/vnd.github+json'})
     with build_opener(HTTPSOnly()).open(request, timeout=10) as response:
         data = response.read(2 * 1024 * 1024 + 1)
     if len(data) > 2 * 1024 * 1024:
@@ -102,7 +118,7 @@ def update_asset(release, architecture):
 def download_asset(asset, destination):
     digest = hashlib.sha256()
     size = 0
-    request = Request(asset['url'], headers={'User-Agent': 'Handoff-Vibe/0.2.0'})
+    request = Request(asset['url'], headers={'User-Agent': 'Handoff-Vibe/' + __version__})
     with build_opener(HTTPSOnly()).open(request, timeout=30) as source, open(destination, 'xb') as target:
         while True:
             chunk = source.read(1024 * 1024)

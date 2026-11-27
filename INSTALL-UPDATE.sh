@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 folder=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-package="$folder/handoff-vibe_0.2.0_amd64.deb"
+package="$folder/handoff-vibe_0.2.1_amd64.deb"
 if [ ! -f "$package" ]; then
-    package="$folder/dist/handoff-vibe_0.2.0_amd64.deb"
+    package="$folder/dist/handoff-vibe_0.2.1_amd64.deb"
 fi
 test -f "$package" || { echo 'Keep this installer beside the Handoff .deb package.'; exit 1; }
 if [ "$(id -u)" -eq 0 ]; then
@@ -44,7 +44,7 @@ systemctl --user daemon-reload
 if [ "$restart" -eq 1 ]; then
     systemctl --user restart "$unit"
 fi
-echo 'Installed Handoff Vibe 0.2.0. Device profiles and service settings were preserved.'
+echo 'Installed Handoff Vibe 0.2.1. Device profiles and service settings were preserved.'
 echo 'Sign out and back in once to reload the upgraded GNOME companion.'
 echo 'Start/Pause Handoff controls switching. Automatic connection and ear detection are in Preferences.'
 echo 'If needed, open Advanced logs in the Handoff menu for connection diagnostics.'

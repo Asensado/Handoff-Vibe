@@ -8,7 +8,6 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {statusFor, protocolFromProperties, unpack, commandMatches} from './state.js';
-import {ProximityCard} from './earport/proximityCard.js';
 
 const BUS = 'io.github.anoryth.EarPort';
 const PATH = '/io/github/anoryth/EarPort';
@@ -78,11 +77,8 @@ export default class HandoffVibeStatus extends Extension {
         this._button.menu.addMenuItem(open);
         Main.panel.addToStatusArea(this.uuid, this._button);
 
-        this._proximity = new ProximityCard(this.getSettings(), {
-            left: this._icon('earport-bud-left-symbolic.svg'),
-            right: this._icon('earport-bud-right-symbolic.svg'),
-            case: this._icon('earport-case-symbolic.svg'),
-        }, this._icon('earport-charging-symbolic.svg'), () => this._callBackend('Connect'));
+        // Unavailable until the notification replacement in issue #1 is ready.
+        this._proximity = null;
         this._createProxy();
         const folder = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_runtime_dir(), 'handoff']));
         try {

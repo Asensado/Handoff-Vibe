@@ -1,3 +1,17 @@
+Handoff Vibe 0.2.1 release validation, 2026-11-27
+
+The final release is gated on clean Debian CI: package build, 53 Python tests (including security regressions), 29 indicator checks, all 23 native suites, Qt controls and GTK smoke tests. See PR #16 and its exact final commit checks for results. Package ownership and isolated Python entrypoints are also checked locally.
+
+Security recheck: unsigned privileged updater actions fail closed; the ordinary app/backend reject root; isolated launchers ignore Python startup injection; device-address/unique-owner checks bind commands; configuration values are validated; process leases and bounded child cleanup remain in place. These are implemented fixes, not a guarantee that no vulnerabilities remain. No new independent audit is claimed.
+
+Live confirmed: Powerbeats Fit core handoff; ANC/Transparency during iPhone audio; accurate GNOME Active/Switching/Handoff; repaired installed GUI startup; Linux ear-pause settings; suspend recovery.
+
+Unavailable: automatic connection (#17) and proximity card (#1) are inactive with insensitive Preferences rows. CLI export is retired. Unsigned automatic/in-app administrator installation remains disabled.
+
+Known limitation accepted for 0.2.1: charger, browser alert and notification sounds can cause unwanted Linux takeover (#5), deferred to 0.2.2. Idle/no-audio takeover and repeated physical process-count checks were not reported complete. The maintainer authorized release with these documented limits. Broader device/firmware validation and #7 recovery work remain open.
+
+Earlier 0.2.0 validation history follows. Its feature claims and counts describe the older build only; the 0.2.1 results and limits above supersede them.
+
 Handoff Vibe 0.2.0 validation, 2026-11-26
 
 PASS: Qt control engine and Earport backend compile on Debian 13 amd64.

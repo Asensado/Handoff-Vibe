@@ -2,11 +2,34 @@
 
 A small GTK/libadwaita app for switching compatible AirPods and Beats between Linux and Apple devices, with battery and noise controls in the app and GNOME top bar.
 
-**AI-Slop made using ChatGPT-6.1 Sol Medium Work. Sorry guys. [Read here.](#a-message-from-asensado)**
+[Download 0.2.1](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.1) · [Setup](#installation-and-setup) · [Compatibility](#compatibility) · [What’s changing](#whats-new-in-021) · [Help](#help-and-updates)
 
-[Download 0.2.0](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.0-PRE.2) · [All releases](https://github.com/Asensado/Handoff-Vibe/releases) · [Compatibility](#compatibility) · [Development](#development)
+> **0.2.1** targets **Debian 13, amd64**. Review the known switching limitation below; other distributions may need a source build.
 
-> **0.2.0 is a prerelease**, like 0.1.0. The supplied package targets **Debian 13, amd64**. Other distributions may need a source build.
+## What's new in 0.2.1?
+
+**Security improvements**
+
+- Unsigned automatic and in-app administrator updates are disabled. Release checks only show information; installation is a deliberate manual step.
+- Python launchers use isolated mode; the ordinary app and engine refuse to run as root. Bluetooth preparation remains a narrow administrator operation.
+- Headset commands verify the selected device and the live D-Bus owner before sending controls.
+- Configuration validation, private diagnostics, and bounded process cleanup improve failure handling.
+
+**Everyday improvements**
+
+- The installed app window and GNOME integration preferences load correctly again.
+- Press **Ctrl+,** to open Preferences, or **Ctrl+L** for Advanced logs.
+- **What's new?** in the dotted menu distinguishes Stable, Release candidate, Beta and Experimental builds using coloured badges.
+- Setup and update work no longer block the controls queue. Log windows clean up their refresh timers, and stale window callbacks are discarded.
+- Handoff, Switching and Active statuses are confirmed locally on Powerbeats Fit; battery and noise controls stay in Handoff's GNOME menu.
+
+**Clear limits**
+
+Automatic connection and the proximity card are greyed out and inactive pending [#17](https://github.com/Asensado/Handoff-Vibe/issues/17) and [#1](https://github.com/Asensado/Handoff-Vibe/issues/1). Ear-removal preferences control **Linux playback only**. Recovery and switching under hardware edge cases remain part of the release checks; spatial audio is future work.
+
+> **Known issue:** charger, browser alert and notification sounds can still cause unwanted switching to Linux. This remains open for 0.2.2 ([#5](https://github.com/Asensado/Handoff-Vibe/issues/5)).
+
+[Security review and implemented fixes](docs/SECURITY-REVIEW-2026-11-26.md) · [Candidate readiness](docs/0.2.1-READINESS.md)
 
 ![Handoff Vibe in dark mode](docs/images/device-dark.png)
 
@@ -16,10 +39,10 @@ You need working Bluetooth and PipeWire-Pulse or PulseAudio. The GNOME companion
 
 ### 1. Install the package
 
-Download **`handoff-vibe_0.2.0_amd64.deb`** from the [0.2.0 release](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.0-PRE.2), open a terminal in its folder, and run:
+Download **`handoff-vibe_0.2.1_amd64.deb`** from the [0.2.1 release](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.1), open a terminal in its folder, and run:
 
 ```sh
-sudo apt install ./handoff-vibe_0.2.0_amd64.deb
+sudo apt install ./handoff-vibe_0.2.1_amd64.deb
 ```
 
 You can also open it in a graphical package installer that resolves dependencies. Launch **Handoff Vibe** from your app menu afterward.
@@ -70,11 +93,11 @@ First-generation AirPods, Studio Buds/Studio Buds +, Studio Pro/Studio3, Solo Bu
 - Device switching controlled by **Start/Pause Handoff**, plus background operation at sign-in.
 - Noise cancellation, Transparency and Off controls through the same headset connection, including while another device owns audio. Adaptive is shown in the GNOME menu when supported.
 - Left/right/case batteries and a listening-time estimate learned from your own discharge sessions. Unavailable readings are omitted.
-- Ear-detection pause/resume, with Never / Either earbud / Both earbuds settings.
-- Optional **Automatic connection**, which checks nearby activity before connecting and avoids taking a headset from another device playing audio or in a call.
-- Optional **proximity card** with batteries and a Connect button. This needs a previous connection, usable Bluetooth LE broadcasts and the GNOME companion.
+- Ear-detection pause/resume, for Linux media players, with Never / Either earbud / Both earbuds settings.
+- **Automatic connection is unavailable for 0.2.1**, pending hardware validation ([#17](https://github.com/Asensado/Handoff-Vibe/issues/17)). Its preference is greyed out.
+- **Proximity card is unavailable**. A battery notification with a Connect button is planned ([#1](https://github.com/Asensado/Handoff-Vibe/issues/1)); its preference is greyed out.
 - Guided pairing, safe import of an existing installation and profile management. CLI export/restore is retired; migration backups remain available.
-- **What's new?** in the dotted menu, with Stable, Beta and Experimental release badges and read-only update notifications.
+- **What's new?** in the dotted menu, with Stable, Release candidate, Beta and Experimental release badges and read-only update notifications.
 - Advanced logs and an offline daily Bible verse.
 
 ## Everyday use
@@ -83,7 +106,7 @@ First-generation AirPods, Studio Buds/Studio Buds +, Studio Pro/Studio3, Solo Bu
 
 The top bar shows **Active**, **Switching**, **Handoff** when another device owns audio, **Disconnected**, or **Paused**. A service failure still shows Error.
 
-Automatic connection is separate from switching: it controls when an otherwise disconnected headset connects to the computer. Proximity cards can take a few seconds to appear, and a silent closed case cannot supply fresh battery readings.
+Normal handoff between connected hosts remains available. Optional automatic connection and proximity cards are disabled while their tracked work is unfinished. Ear-removal pause preferences control Linux media players; iPhone playback follows its own ear-detection setting.
 
 ## Help and updates
 
@@ -155,7 +178,7 @@ The GTK app and user-service supervisor communicate over D-Bus with a separately
 | Runtime status/logs | `$XDG_RUNTIME_DIR/handoff/<MAC-without-colons>.json` and `.log` |
 | GNOME companion | `handoff-vibe@asensado.github.io` |
 
-Configuration paths honour `XDG_CONFIG_HOME`. The release workflow builds on Debian 13, runs tests, renders the demo setup images, and attaches the package, complete source and checksums to the release. [RELEASE.json](RELEASE.json) records the intended tag and prerelease status.
+Configuration paths honour `XDG_CONFIG_HOME`. The release workflow builds on Debian 13, runs tests, renders demo setup images into the release source archive, and attaches the package, complete source and checksums. It does not push to main. Branch rules and rollback procedures are documented in [docs/MAINTAINING.md](docs/MAINTAINING.md). [RELEASE.json](RELEASE.json) records the intended tag and prerelease status.
 
 ## Credits and licenses
 
@@ -168,7 +191,7 @@ Configuration paths honour `XDG_CONFIG_HOME`. The release workflow builds on Deb
 | UI inspiration | [Packet](https://github.com/nozwock/packet); no Packet code or artwork is copied |
 | Bible text | World English Bible, public domain |
 
-Handoff Vibe 0.2.0 is free software under GPLv3 or later, including for personal, commercial and educational use. When distributing covered software, preserve copyright/license notices and meet GPL corresponding-source obligations. Original MIT code keeps its MIT permissions. The bundled device illustrations are original GPL artwork, not manufacturer photos; device names remain their owners’ trademarks. See [LICENSING.md](LICENSING.md), [THIRD_PARTY.md](THIRD_PARTY.md), [NOTICE](NOTICE) and the included license texts.
+Handoff Vibe is free software under GPLv3 or later, including for personal, commercial and educational use. When distributing covered software, preserve copyright/license notices and meet GPL corresponding-source obligations. Original MIT code keeps its MIT permissions. The bundled device illustrations are original GPL artwork, not manufacturer photos; device names remain their owners’ trademarks. See [LICENSING.md](LICENSING.md), [THIRD_PARTY.md](THIRD_PARTY.md), [NOTICE](NOTICE) and the included license texts.
 
 ### A message from Asensado
 

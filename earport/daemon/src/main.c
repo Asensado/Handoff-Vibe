@@ -503,6 +503,8 @@ static void on_set_auto_connect(bool enabled, void *user_data)
 {
     (void)user_data;
 
+    /* Handoff 0.2.1 release gate: validate optional auto-connect in #17. */
+    enabled = false;
     app.config.auto_connect = enabled;
     config_save(&app.config);
     dbus_service_set_auto_connect(app.dbus_service, enabled);
@@ -863,6 +865,8 @@ int main(int argc, char *argv[])
 
     /* Load configuration */
     config_load(&app.config);
+    /* Ignore older opt-ins until optional automatic connection is validated (#17). */
+    app.config.auto_connect = false;
     research_set_enabled(app.config.research_log);
 
     /* Initialize state */

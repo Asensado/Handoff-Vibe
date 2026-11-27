@@ -34,6 +34,7 @@ def test_device():
     assert 'Active' in app.pill.get_label()
     assert app.pages.get_pages().get_n_items() == 1
     assert app.lookup_action('whats-new') is not None
+    assert '<Control>comma' in app.get_accels_for_action('app.preferences')
     assert app.controls_box.get_margin_top() == 0
     assert not app.listening_label.get_visible()
     assert not app.controls_note.get_visible()
@@ -81,6 +82,8 @@ def test_logs():
     app.demo = True
     app.logs_window.close()
     app.preferences()
+    assert all(not item.get_sensitive() and not control.get_active()
+               for item, control in app.unavailable_features)
     from handoff_ui import releases as R
     from unittest.mock import patch
     with patch('handoff_ui.app.__version__', '0.2.0-PRE.2'):
@@ -89,6 +92,7 @@ def test_logs():
     app.show_releases(R.parse_releases([
         dict(tag_name='v0.2.0', body='Stable release notes'),
         dict(tag_name='v0.3.0-beta.1', prerelease=True, body='Beta release notes'),
+        dict(tag_name='v0.3.0-rc.1', prerelease=True, body='Candidate release notes'),
         dict(tag_name='v0.4.0-experimental', prerelease=True, body='Experimental notes'),
     ], include_prereleases=True))
     assert app.release_entries.get_first_child().has_css_class('release-card')
@@ -103,6 +107,8 @@ def test_logs():
 def test_about():
     from handoff_ui.about import MESSAGE, AUTHOR_URL
     assert AUTHOR_URL == 'https://github.com/Asensado/'
+    from handoff_ui import __version__
+    assert app.about_window.version_label.get_label() == __version__
     assert app.about_window.license_text.get_label() == 'GPLv3 or later · Free software'
     assert app.about_window.details_row.get_next_sibling() == app.about_window.message_row
     assert app.about_window.stack.get_visible_child_name() == 'main'

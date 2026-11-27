@@ -48,6 +48,7 @@ button.noise-mode.suggested-action { background: @accent_bg_color; color: @accen
 .release-card { padding: 16px; }
 .release-badge { border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; }
 .release-badge.stable { color: @success_color; background: alpha(@success_color, 0.14); }
+.release-badge.rc { color: @accent_color; background: alpha(@accent_color, 0.14); }
 .release-badge.beta { color: @warning_color; background: alpha(@warning_color, 0.14); }
 .release-badge.experimental { color: white; background: #813d9c; }
 '''
@@ -150,6 +151,7 @@ class Handoff(Adw.Application):
         if hasattr(self, 'window'):
             self.window.present()
             return
+        self.set_accels_for_action('app.preferences', ['<Primary>comma'])
         self.set_accels_for_action('app.logs', ['<Primary>l'])
         self.set_accels_for_action('app.quit', ['<Primary>q'])
         for name, fn in [('preferences', self.preferences), ('logs', self.logs), ('about', self.about), ('whats-new', self.show_whats_new), ('quit', lambda *_: self.window.close())]:
@@ -614,7 +616,7 @@ class Handoff(Adw.Application):
         if not self.demo and self.device:
             device = dict(self.device)
             self.job(lambda: B.engine_setting(key, value, device), None,
-                     lambda _: self.toast('Setting saved. Start Handoff to apply it.'))
+                     lambda message: self.error('Setting saved but could not be applied to the running headset service. Start Handoff or retry. Details: ' + message))
 
     def change_update_checks(self, enabled):
         self.config['check_updates'] = enabled
@@ -656,14 +658,14 @@ class Handoff(Adw.Application):
             title.set_hexpand(True)
             heading.append(title)
             channel = release.get('channel', 'stable')
-            badge = label({'stable': 'Stable', 'beta': 'Beta', 'experimental': 'Experimental'}[channel], f'release-badge {channel}')
+            badge = label({'stable': 'Stable', 'rc': 'Release candidate', 'beta': 'Beta', 'experimental': 'Experimental'}[channel], f'release-badge {channel}')
             badge.set_valign(Gtk.Align.CENTER)
             heading.append(badge)
             card.append(heading)
             date = label(' · '.join(part for part in [release['tag'], release['date']] if part), 'caption dim-label')
             date.set_xalign(0)
             card.append(date)
-            description = label(release['body'])
+            description = label(R.notes_text(release['body']))
             description.set_xalign(0)
             description.set_justify(Gtk.Justification.LEFT)
             description.set_selectable(True)
@@ -696,20 +698,17 @@ class Handoff(Adw.Application):
         win.add(page)
         connection = Adw.PreferencesGroup(title='Headset connection')
         page.add(connection)
-        for key, title, description in [
-            ('auto_connect', 'Automatic connection', 'Connect when worn or when computer playback starts. Do not take audio from another device playing music or in a call.'),
+        self.unavailable_features = []
+        for title, description in [
+            ('Automatic connection', 'Unavailable in 0.2.1 while connection behavior is validated. Tracked in GitHub issue #17.'),
+            ('Proximity card', 'Unavailable. A battery notification with a Connect button is planned in GitHub issue #1.'),
         ]:
-            item, _ = switch_row(title, description, self.config.get(key, False),
-                                  lambda active, setting=key: self.change_engine_setting(setting, active))
+            item, control = switch_row(title, description, False, lambda _: None)
+            item.set_sensitive(False)
+            item.set_tooltip_text(description)
+            self.unavailable_features.append((item, control))
             connection.add(item)
-        try:
-            proximity_enabled = B.proximity_enabled()
-        except Exception:
-            proximity_enabled = True
-        item, _ = switch_row('Proximity card', 'Show nearby case batteries and a Connect button. Requires the GNOME companion and a previously connected supported headset.',
-                             proximity_enabled, lambda enabled: None if self.demo else self.job(lambda: B.set_proximity_enabled(enabled)))
-        connection.add(item)
-        ear = Adw.ComboRow(title='Pause when taking earbuds out', model=Gtk.StringList.new(['Never', 'Either earbud', 'Both earbuds']))
+        ear = Adw.ComboRow(title='Pause Linux audio when taking earbuds out', subtitle='Controls media players on this computer only. iPhone playback follows its own Automatic Ear Detection setting.', model=Gtk.StringList.new(['Never', 'Either earbud', 'Both earbuds']))
         ear.set_selected(self.config.get('ear_pause_mode', 1))
         ear.connect('notify::selected', lambda choice, _: self.change_engine_setting('ear_pause_mode', choice.get_selected()))
         connection.add(ear)
