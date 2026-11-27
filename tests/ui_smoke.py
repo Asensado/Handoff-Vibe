@@ -34,6 +34,7 @@ def test_device():
     assert 'Active' in app.pill.get_label()
     assert app.pages.get_pages().get_n_items() == 1
     assert app.lookup_action('whats-new') is not None
+    assert '<Control>comma' in app.get_accels_for_action('app.preferences')
     assert app.controls_box.get_margin_top() == 0
     assert not app.listening_label.get_visible()
     assert not app.controls_note.get_visible()
@@ -89,6 +90,7 @@ def test_logs():
     app.show_releases(R.parse_releases([
         dict(tag_name='v0.2.0', body='Stable release notes'),
         dict(tag_name='v0.3.0-beta.1', prerelease=True, body='Beta release notes'),
+        dict(tag_name='v0.3.0-rc.1', prerelease=True, body='Candidate release notes'),
         dict(tag_name='v0.4.0-experimental', prerelease=True, body='Experimental notes'),
     ], include_prereleases=True))
     assert app.release_entries.get_first_child().has_css_class('release-card')

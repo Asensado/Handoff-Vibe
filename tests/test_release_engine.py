@@ -33,9 +33,18 @@ class Releases(unittest.TestCase):
                    self.release(tag_name='v0.5.0-rc1'),
                    self.release(tag_name='v9.0.0', draft=True)]
         history = R.parse_releases(payload, include_prereleases=True)
-        self.assertEqual([item['channel'] for item in history], ['beta', 'experimental', 'beta', 'stable'])
+        self.assertEqual([item['channel'] for item in history], ['rc', 'experimental', 'beta', 'stable'])
         self.assertEqual([item['version'] for item in R.parse_releases(payload)], ['0.2.0'])
         self.assertNotIn('9.0.0', [item['version'] for item in history])
+
+    def test_release_candidates_have_a_distinct_channel_and_numeric_order(self):
+        tags = ['v0.3.0-beta.2', 'v0.3.0-rc.2', 'v0.3.0-rc.10', 'v0.3.0', 'v0.3.0-rc1']
+        history = R.parse_releases([self.release(tag_name=tag) for tag in tags], include_prereleases=True)
+        self.assertEqual([r['tag'] for r in history], [tags[3], tags[2], tags[1], tags[4], tags[0]])
+        for suffix in ('rc1', 'rc.1', 'RC.2', 'candidate.1'):
+            self.assertEqual(R.release_identity('v0.3.0-' + suffix)[2], 'rc')
+        self.assertEqual(len(R.parse_releases([self.release(tag_name=tag) for tag in tags])), 1)
+        self.assertTrue(R.is_newer('0.3.0', '0.3.0-rc.2'))
 
     def test_github_prerelease_flag_without_suffix_is_beta(self):
         result = R.parse_releases([self.release(prerelease=True)], include_prereleases=True)
