@@ -27,6 +27,8 @@ A small GTK/libadwaita app for switching compatible AirPods and Beats between Li
 
 Automatic connection and the proximity card are greyed out and inactive pending [#17](https://github.com/Asensado/Handoff-Vibe/issues/17) and [#1](https://github.com/Asensado/Handoff-Vibe/issues/1). Ear-removal preferences control **Linux playback only**. Recovery and switching under hardware edge cases remain part of the release checks; spatial audio is future work.
 
+> **Known issue:** charger, browser alert and notification sounds can still cause unwanted switching to Linux. This remains open for 0.2.2 ([#5](https://github.com/Asensado/Handoff-Vibe/issues/5)).
+
 [Security review and implemented fixes](docs/SECURITY-REVIEW-2026-11-26.md) · [Candidate readiness](docs/0.2.1-READINESS.md)
 
 ![Handoff Vibe in dark mode](docs/images/device-dark.png)

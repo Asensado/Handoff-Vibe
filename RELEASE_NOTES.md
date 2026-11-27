@@ -29,6 +29,10 @@ These fixes are implemented in the candidate source and covered by regression te
 
 Automatic connection and proximity cards are inactive and greyed out. Automatic connection needs hardware validation (#17); the card is being replaced with a battery notification and Connect action (#1). Spatial audio and broader model validation remain future work. Other headset models, firmware and Bluetooth adapters may behave differently.
 
+## Known issue carried into 0.2.1
+
+Charger, browser alert and notification sounds can still trigger unwanted switching to Linux (#5). This remains open and is deferred to 0.2.2. Ear-pause on Linux and suspend recovery were confirmed working on the test system; other hardware and edge cases may differ.
+
 ## Install or upgrade
 
 Targets Debian 13 amd64. Download handoff-vibe_0.2.1_amd64.deb from this release and install it with APT. Close the older app first, then sign out and back in after upgrading to reload the GNOME companion. Profiles remain in place.
