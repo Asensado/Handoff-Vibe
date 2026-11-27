@@ -4,6 +4,7 @@
 import gi
 gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1')
 from gi.repository import Adw, Gtk
+from . import __version__
 
 AUTHOR_URL = 'https://github.com/Asensado/'
 MESSAGE = "Hi there! At the time of writing, I'm still a first-year university student taking Computing Science. This was just a curiosity project and I'm surprised this worked great on a trial of ChatGPT Plus Work. I know vibe-coded stuff is ew, and I do plan on actually not relying on AI to code my ideas. This was just a QoL to a project I use daily, and I hope it's useful to you too. Thanks for taking the time to read this. God bless!"
@@ -26,7 +27,8 @@ class About(Adw.Window):
         icon.set_pixel_size(90)
         home.append(icon)
         home.append(self.text('Handoff Vibe', 'title-1'))
-        home.append(self.text('0.2.0', 'dim-label'))
+        self.version_label = self.text(__version__, 'dim-label')
+        home.append(self.version_label)
         self.license_text = self.text('GPLv3 or later · Free software', 'caption dim-label')
         home.append(self.license_text)
         home.append(self.text('Made with ❤️ by', 'dim-label'))

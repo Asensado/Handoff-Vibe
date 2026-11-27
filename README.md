@@ -2,11 +2,11 @@
 
 A small GTK/libadwaita app for switching compatible AirPods and Beats between Linux and Apple devices, with battery and noise controls in the app and GNOME top bar.
 
-[Download](https://github.com/Asensado/Handoff-Vibe/releases) · [Setup](#installation-and-setup) · [Compatibility](#compatibility) · [What’s changing](#whats-new-for-021) · [Help](#help-and-updates)
+[Download 0.2.1](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.1) · [Setup](#installation-and-setup) · [Compatibility](#compatibility) · [What’s changing](#whats-new-in-021) · [Help](#help-and-updates)
 
-> **0.2.1 is being tested.** The current public download remains the 0.2.0 prerelease until final checks pass. Packages target **Debian 13, amd64**; other distributions may need a source build.
+> **0.2.1** targets **Debian 13, amd64**. Review the known switching limitation below; other distributions may need a source build.
 
-## What's new for 0.2.1?
+## What's new in 0.2.1?
 
 **Security improvements**
 
@@ -39,10 +39,10 @@ You need working Bluetooth and PipeWire-Pulse or PulseAudio. The GNOME companion
 
 ### 1. Install the package
 
-Download **`handoff-vibe_0.2.0_amd64.deb`** from the [0.2.0 release](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.0-PRE.2), open a terminal in its folder, and run:
+Download **`handoff-vibe_0.2.1_amd64.deb`** from the [0.2.1 release](https://github.com/Asensado/Handoff-Vibe/releases/tag/v0.2.1), open a terminal in its folder, and run:
 
 ```sh
-sudo apt install ./handoff-vibe_0.2.0_amd64.deb
+sudo apt install ./handoff-vibe_0.2.1_amd64.deb
 ```
 
 You can also open it in a graphical package installer that resolves dependencies. Launch **Handoff Vibe** from your app menu afterward.

@@ -107,6 +107,8 @@ def test_logs():
 def test_about():
     from handoff_ui.about import MESSAGE, AUTHOR_URL
     assert AUTHOR_URL == 'https://github.com/Asensado/'
+    from handoff_ui import __version__
+    assert app.about_window.version_label.get_label() == __version__
     assert app.about_window.license_text.get_label() == 'GPLv3 or later · Free software'
     assert app.about_window.details_row.get_next_sibling() == app.about_window.message_row
     assert app.about_window.stack.get_visible_child_name() == 'main'

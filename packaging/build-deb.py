@@ -57,7 +57,7 @@ result = subprocess.check_output(['dpkg-shlibdeps', '-O', '-e' + str(BUILD / 'ai
 shared = next(line.split('=', 1)[1] for line in result.splitlines() if line.startswith('shlibs:Depends='))
 deps = 'python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.8), gir1.2-adw-1 (>= 1.3), bluez, systemd, pulseaudio-utils, pkexec, librsvg2-common, ' + shared
 (STAGE / 'DEBIAN/control').write_text(f'''Package: handoff-vibe
-Version: 0.2.0
+Version: 0.2.1
 Replaces: handoff (<< 0.3.0)
 Breaks: handoff (<< 0.3.0)
 Architecture: {ARCH}
@@ -77,6 +77,6 @@ Description: Handoff Vibe graphical setup and status for AirPods and Beats
 (STAGE / 'DEBIAN/postinst').chmod(0o755)
 (STAGE / 'DEBIAN/postrm').chmod(0o755)
 DIST.mkdir(exist_ok=True)
-package = DIST / f'handoff-vibe_0.2.0_{ARCH}.deb'
+package = DIST / f'handoff-vibe_0.2.1_{ARCH}.deb'
 subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(STAGE), str(package)], check=True)
 print(package)

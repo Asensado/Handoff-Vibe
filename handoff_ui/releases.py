@@ -4,6 +4,7 @@
 import hashlib
 import json
 import re
+from . import __version__
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 REPOSITORY = 'https://github.com/Asensado/Handoff-Vibe'
@@ -94,7 +95,7 @@ def parse_releases(payload, include_prereleases=False):
 
 
 def fetch_releases(include_prereleases=False):
-    request = Request(API, headers={'User-Agent': 'Handoff-Vibe/0.2.0', 'Accept': 'application/vnd.github+json'})
+    request = Request(API, headers={'User-Agent': 'Handoff-Vibe/' + __version__, 'Accept': 'application/vnd.github+json'})
     with build_opener(HTTPSOnly()).open(request, timeout=10) as response:
         data = response.read(2 * 1024 * 1024 + 1)
     if len(data) > 2 * 1024 * 1024:
@@ -117,7 +118,7 @@ def update_asset(release, architecture):
 def download_asset(asset, destination):
     digest = hashlib.sha256()
     size = 0
-    request = Request(asset['url'], headers={'User-Agent': 'Handoff-Vibe/0.2.0'})
+    request = Request(asset['url'], headers={'User-Agent': 'Handoff-Vibe/' + __version__})
     with build_opener(HTTPSOnly()).open(request, timeout=30) as source, open(destination, 'xb') as target:
         while True:
             chunk = source.read(1024 * 1024)
